@@ -1,6 +1,6 @@
 """
-Alpha Deck - Personal Bloomberg Terminal for Options Traders
-Optimized for Streamlit Community Cloud - Enhanced Edition
+Alpha Deck v3.0 - Personal Bloomberg Terminal for Options Traders
+Enhanced with SPX Options Analytics
 """
 
 import streamlit as st
@@ -8,6 +8,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import feedparser
 from datetime import datetime, timedelta
@@ -88,33 +89,47 @@ st.markdown("""
         margin: 2rem 0;
         border-color: #2d3139;
     }
+    
+    /* Info boxes */
+    .info-box {
+        background: linear-gradient(145deg, #1a1d29, #0d0f14);
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #2d5cff;
+        margin: 10px 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# CACHED DATA FUNCTIONS
+# CACHED DATA FUNCTIONS - IMPROVED WITH BETTER ERROR HANDLING
 # ============================================================================
 
 @st.cache_data(ttl=60)
-def fetch_ticker_data(ticker):
-    """Fetch single ticker data with 60s cache"""
+def fetch_ticker_data_reliable(ticker):
+    """Fetch single ticker data using Ticker.history() method - more reliable"""
     try:
-        data = yf.download(ticker, period='5d', interval='1d', progress=False)
-        if data.empty:
-            return {'price': 0, 'change_pct': 0, 'volume': 0}
+        stock = yf.Ticker(ticker)
+        # Use history method instead of download
+        hist = stock.history(period='5d')
         
-        current_price = data['Close'].iloc[-1]
-        prev_close = data['Close'].iloc[-2] if len(data) > 1 else current_price
+        if hist.empty:
+            return {'price': 0, 'change_pct': 0, 'volume': 0, 'success': False}
+        
+        current_price = hist['Close'].iloc[-1]
+        prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
         change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
-        volume = data['Volume'].iloc[-1] if 'Volume' in data else 0
+        volume = hist['Volume'].iloc[-1] if 'Volume' in hist else 0
         
         return {
             'price': float(current_price),
             'change_pct': float(change_pct),
-            'volume': int(volume)
+            'volume': int(volume),
+            'success': True
         }
     except Exception as e:
-        return {'price': 0, 'change_pct': 0, 'volume': 0}
+        st.error(f"Error fetching {ticker}: {str(e)}")
+        return {'price': 0, 'change_pct': 0, 'volume': 0, 'success': False}
 
 @st.cache_data(ttl=60)
 def calculate_rsi(prices, period=14):
@@ -130,27 +145,27 @@ def calculate_rsi(prices, period=14):
         return 50.0
 
 @st.cache_data(ttl=60)
-def fetch_multiple_tickers(tickers):
-    """Fetch multiple tickers efficiently with RSI calculation"""
+def fetch_watchlist_data(tickers):
+    """Fetch multiple tickers with improved reliability"""
     results = []
     
     for ticker in tickers:
         try:
-            # Download historical data for RSI
-            df = yf.download(ticker, period='1mo', progress=False, interval='1d')
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period='1mo')
             
-            if df.empty:
+            if hist.empty:
                 continue
             
-            current_price = df['Close'].iloc[-1]
-            prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
+            current_price = hist['Close'].iloc[-1]
+            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
             change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
-            volume = df['Volume'].iloc[-1] if 'Volume' in df.columns else 0
-            day_low = df['Low'].iloc[-1] if 'Low' in df.columns else current_price
-            day_high = df['High'].iloc[-1] if 'High' in df.columns else current_price
+            volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
+            day_low = hist['Low'].iloc[-1] if 'Low' in hist.columns else current_price
+            day_high = hist['High'].iloc[-1] if 'High' in hist.columns else current_price
             
             # Calculate RSI
-            rsi_value = calculate_rsi(df['Close'])
+            rsi_value = calculate_rsi(hist['Close'])
             
             results.append({
                 'Ticker': ticker,
@@ -166,6 +181,60 @@ def fetch_multiple_tickers(tickers):
     return pd.DataFrame(results)
 
 @st.cache_data(ttl=60)
+def fetch_spx_options_data():
+    """Fetch SPX options data and calculate key metrics"""
+    try:
+        spx = yf.Ticker("^GSPC")
+        
+        # Get options expiration dates
+        expirations = spx.options
+        if not expirations:
+            return None
+        
+        # Get nearest expiration
+        nearest_exp = expirations[0]
+        opt_chain = spx.option_chain(nearest_exp)
+        
+        calls = opt_chain.calls
+        puts = opt_chain.puts
+        
+        # Calculate Put/Call Ratio
+        total_call_volume = calls['volume'].sum()
+        total_put_volume = puts['volume'].sum()
+        put_call_ratio = total_put_volume / total_call_volume if total_call_volume > 0 else 0
+        
+        # Calculate Put/Call Open Interest Ratio
+        total_call_oi = calls['openInterest'].sum()
+        total_put_oi = puts['openInterest'].sum()
+        put_call_oi_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
+        
+        # Get max pain (strike with most open interest)
+        calls_oi = calls.groupby('strike')['openInterest'].sum()
+        puts_oi = puts.groupby('strike')['openInterest'].sum()
+        total_oi = calls_oi.add(puts_oi, fill_value=0)
+        max_pain = total_oi.idxmax() if not total_oi.empty else 0
+        
+        # Calculate average IV
+        avg_call_iv = calls['impliedVolatility'].mean() * 100
+        avg_put_iv = puts['impliedVolatility'].mean() * 100
+        
+        return {
+            'expiration': nearest_exp,
+            'put_call_ratio': put_call_ratio,
+            'put_call_oi_ratio': put_call_oi_ratio,
+            'max_pain': max_pain,
+            'avg_call_iv': avg_call_iv,
+            'avg_put_iv': avg_put_iv,
+            'calls': calls,
+            'puts': puts,
+            'total_call_volume': total_call_volume,
+            'total_put_volume': total_put_volume
+        }
+    except Exception as e:
+        st.error(f"SPX options data unavailable: {str(e)}")
+        return None
+
+@st.cache_data(ttl=60)
 def fetch_index_data():
     """Fetch major indices data"""
     indices = {
@@ -179,7 +248,7 @@ def fetch_index_data():
     
     results = {}
     for name, ticker in indices.items():
-        data = fetch_ticker_data(ticker)
+        data = fetch_ticker_data_reliable(ticker)
         results[name] = data
     
     return results
@@ -203,14 +272,15 @@ def fetch_sector_performance():
     
     results = []
     for ticker, name in sectors.items():
-        data = fetch_ticker_data(ticker)
-        results.append({
-            'Sector': name,
-            'Change %': data['change_pct']
-        })
+        data = fetch_ticker_data_reliable(ticker)
+        if data['success']:
+            results.append({
+                'Sector': name,
+                'Change %': data['change_pct']
+            })
     
     df = pd.DataFrame(results)
-    return df.sort_values('Change %', ascending=False)
+    return df.sort_values('Change %', ascending=False) if not df.empty else df
 
 @st.cache_data(ttl=300)
 def fetch_news_feeds():
@@ -275,21 +345,21 @@ def fetch_crypto_data(cryptos):
     for crypto_symbol in cryptos:
         ticker = f"{crypto_symbol}-USD"
         try:
-            # Download historical data for RSI
-            df = yf.download(ticker, period='1mo', progress=False, interval='1d')
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period='1mo')
             
-            if df.empty:
+            if hist.empty:
                 continue
             
-            current_price = df['Close'].iloc[-1]
-            prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
+            current_price = hist['Close'].iloc[-1]
+            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
             change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
-            volume = df['Volume'].iloc[-1] if 'Volume' in df.columns else 0
-            day_low = df['Low'].iloc[-1] if 'Low' in df.columns else current_price
-            day_high = df['High'].iloc[-1] if 'High' in df.columns else current_price
+            volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
+            day_low = hist['Low'].iloc[-1] if 'Low' in hist.columns else current_price
+            day_high = hist['High'].iloc[-1] if 'High' in hist.columns else current_price
             
             # Calculate RSI
-            rsi_value = calculate_rsi(df['Close'])
+            rsi_value = calculate_rsi(hist['Close'])
             
             results.append({
                 'Ticker': crypto_symbol,
@@ -306,11 +376,9 @@ def fetch_crypto_data(cryptos):
 
 @st.cache_data(ttl=300)
 def fetch_polymarket_data():
-    """Fetch Polymarket trending markets with better error handling"""
+    """Fetch Polymarket trending markets"""
     try:
-        # Alternative endpoint - simplified markets
         url = "https://clob.polymarket.com/markets"
-        
         response = requests.get(url, timeout=10)
         
         if response.status_code != 200:
@@ -319,14 +387,11 @@ def fetch_polymarket_data():
         data = response.json()
         
         results = []
-        for market in data[:8]:  # Get top 8 markets
+        for market in data[:8]:
             question = market.get('question', 'N/A')
-            
-            # Get outcome tokens
             outcomes = market.get('outcomes', ['Yes', 'No'])
             outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
             
-            # Parse prices
             try:
                 yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0.5
                 no_price = float(outcome_prices[1]) if len(outcome_prices) > 1 else 0.5
@@ -354,12 +419,12 @@ def create_sample_polymarket_data():
         'Event': [
             'Presidential Election 2024',
             'Fed Rate Cut March 2025',
-            'Bitcoin above $100k by EOY',
+            'Bitcoin above $100k EOY',
             'Recession in 2025',
-            'AI Breakthrough This Year',
-            'Ukraine Conflict Resolution',
-            'Stock Market Correction',
-            'Major Tech M&A Deal'
+            'AI Breakthrough 2025',
+            'Ukraine Conflict End',
+            'Market Correction',
+            'Tech M&A Deal'
         ],
         'Yes': [52.3, 78.5, 45.2, 34.8, 61.9, 28.3, 42.1, 55.7],
         'No': [47.7, 21.5, 54.8, 65.2, 38.1, 71.7, 57.9, 44.3]
@@ -367,9 +432,10 @@ def create_sample_polymarket_data():
 
 @st.cache_data(ttl=60)
 def fetch_candlestick_data(ticker, period='3mo'):
-    """Fetch candlestick data with better error handling"""
+    """Fetch candlestick data"""
     try:
-        data = yf.download(ticker, period=period, interval='1d', progress=False)
+        stock = yf.Ticker(ticker)
+        data = stock.history(period=period)
         if data.empty:
             return None
         return data
@@ -432,12 +498,118 @@ with tab1:
     cols = st.columns(6)
     for idx, (name, data) in enumerate(indices.items()):
         with cols[idx]:
-            delta_color = "normal" if data['change_pct'] >= 0 else "inverse"
+            if data['success']:
+                delta_color = "normal" if data['change_pct'] >= 0 else "inverse"
+                st.metric(
+                    label=name,
+                    value=f"${data['price']:.2f}" if name not in ['VIX', 'VVIX'] else f"{data['price']:.2f}",
+                    delta=f"{data['change_pct']:.2f}%"
+                )
+            else:
+                st.metric(label=name, value="Loading...")
+    
+    st.divider()
+    
+    # SPX OPTIONS ANALYTICS SECTION
+    st.subheader("🎯 SPX Options Intelligence")
+    
+    with st.spinner('Analyzing SPX options flow...'):
+        spx_data = fetch_spx_options_data()
+    
+    if spx_data:
+        # Options metrics row
+        opt_cols = st.columns(5)
+        
+        with opt_cols[0]:
             st.metric(
-                label=name,
-                value=f"${data['price']:.2f}" if name not in ['VIX', 'VVIX'] else f"{data['price']:.2f}",
-                delta=f"{data['change_pct']:.2f}%"
+                "Put/Call Ratio",
+                f"{spx_data['put_call_ratio']:.2f}",
+                help="Volume-based P/C ratio. >1.0 = bearish, <1.0 = bullish"
             )
+        
+        with opt_cols[1]:
+            st.metric(
+                "P/C OI Ratio",
+                f"{spx_data['put_call_oi_ratio']:.2f}",
+                help="Open Interest P/C ratio"
+            )
+        
+        with opt_cols[2]:
+            st.metric(
+                "Max Pain",
+                f"${spx_data['max_pain']:.0f}",
+                help="Strike with highest total open interest"
+            )
+        
+        with opt_cols[3]:
+            st.metric(
+                "Avg Call IV",
+                f"{spx_data['avg_call_iv']:.1f}%",
+                help="Average implied volatility for calls"
+            )
+        
+        with opt_cols[4]:
+            st.metric(
+                "Avg Put IV",
+                f"{spx_data['avg_put_iv']:.1f}%",
+                help="Average implied volatility for puts"
+            )
+        
+        st.caption(f"📅 Expiration: {spx_data['expiration']}")
+        
+        # Volume visualization
+        col_vol1, col_vol2 = st.columns(2)
+        
+        with col_vol1:
+            # Options Volume Distribution
+            fig_volume = go.Figure(data=[
+                go.Bar(name='Calls', x=['Volume'], y=[spx_data['total_call_volume']], marker_color='#00ff88'),
+                go.Bar(name='Puts', x=['Volume'], y=[spx_data['total_put_volume']], marker_color='#ff4444')
+            ])
+            fig_volume.update_layout(
+                title="Call vs Put Volume",
+                template='plotly_dark',
+                height=250,
+                showlegend=True,
+                margin=dict(l=0, r=0, t=40, b=0),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig_volume, use_container_width=True)
+        
+        with col_vol2:
+            # IV Skew
+            calls_top = spx_data['calls'].nlargest(10, 'volume')
+            puts_top = spx_data['puts'].nlargest(10, 'volume')
+            
+            fig_iv = go.Figure()
+            fig_iv.add_trace(go.Scatter(
+                x=calls_top['strike'],
+                y=calls_top['impliedVolatility'] * 100,
+                mode='markers',
+                name='Calls',
+                marker=dict(size=10, color='#00ff88')
+            ))
+            fig_iv.add_trace(go.Scatter(
+                x=puts_top['strike'],
+                y=puts_top['impliedVolatility'] * 100,
+                mode='markers',
+                name='Puts',
+                marker=dict(size=10, color='#ff4444')
+            ))
+            fig_iv.update_layout(
+                title="IV by Strike (Top 10 Volume)",
+                template='plotly_dark',
+                height=250,
+                xaxis_title="Strike",
+                yaxis_title="IV %",
+                margin=dict(l=0, r=0, t=40, b=0),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig_iv, use_container_width=True)
+    else:
+        st.info("SPX options data temporarily unavailable")
     
     st.divider()
     
@@ -449,14 +621,13 @@ with tab1:
         watchlist_tickers = ['NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR', 'SPY', 'QQQ', 'IWM']
         
         with st.spinner('Fetching watchlist...'):
-            df = fetch_multiple_tickers(watchlist_tickers)
+            df = fetch_watchlist_data(watchlist_tickers)
         
         if not df.empty:
-            # Style the dataframe
             styled_df = df.style.applymap(color_change, subset=['Change %']).apply(highlight_rsi, axis=1)
             st.dataframe(styled_df, use_container_width=True, height=500)
         else:
-            st.error("Unable to load watchlist data")
+            st.error("Unable to load watchlist data. Please refresh.")
     
     with col2:
         st.subheader("🎨 Sector Heat Map")
@@ -496,7 +667,7 @@ with tab2:
     
     with col1:
         st.subheader("📅 Earnings Watch (Next 7 Days)")
-        watchlist_tickers = ['NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR', 'SPY', 'QQQ', 'IWM']
+        watchlist_tickers = ['NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR']
         
         with st.spinner('Scanning earnings calendar...'):
             earnings_df = fetch_earnings_calendar(watchlist_tickers)
@@ -521,7 +692,6 @@ with tab2:
     st.divider()
     st.subheader("🌍 Economic Calendar")
     
-    # TradingView Economic Calendar Widget
     tradingview_widget = """
     <div class="tradingview-widget-container" style="height:100%;width:100%">
       <div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div>
@@ -565,7 +735,6 @@ with tab3:
             poly_df = fetch_polymarket_data()
         
         if not poly_df.empty:
-            # Create a visual representation
             fig = go.Figure()
             
             fig.add_trace(go.Bar(
@@ -604,8 +773,6 @@ with tab3:
             )
             
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error("Unable to load Polymarket data")
 
 # ============================================================================
 # TAB 4: CHARTS
@@ -613,8 +780,7 @@ with tab3:
 with tab4:
     st.subheader("📈 Advanced Charting")
     
-    # Combine stocks and crypto for selection
-    all_tickers = ['NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR', 'SPY', 'QQQ', 'IWM', 'BTC-USD', 'ETH-USD', 'SOL-USD']
+    all_tickers = ['SPY', 'QQQ', 'IWM', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR', 'BTC-USD', 'ETH-USD']
     
     col1, col2 = st.columns([3, 7])
     
@@ -658,4 +824,4 @@ with tab4:
 
 # Footer
 st.divider()
-st.caption("⚡ Alpha Deck v2.0 | Live Market Data | Built with Streamlit | Not Financial Advice")
+st.caption("⚡ Alpha Deck v3.0 | SPX Options Analytics | Live Market Data | Not Financial Advice")
