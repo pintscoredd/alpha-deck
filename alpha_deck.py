@@ -1,6 +1,6 @@
 """
-Alpha Deck v3.0 - Personal Bloomberg Terminal for Options Traders
-Enhanced with SPX Options Analytics
+Alpha Deck v3.1 - Personal Bloomberg Terminal for Options Traders
+Enhanced with Advanced Polymarket Analytics
 """
 
 import streamlit as st
@@ -13,6 +13,7 @@ import requests
 import feedparser
 from datetime import datetime, timedelta
 import numpy as np
+import pytz
 
 # ============================================================================
 # PAGE CONFIG - FORCE DARK MODE
@@ -90,19 +91,51 @@ st.markdown("""
         border-color: #2d3139;
     }
     
-    /* Info boxes */
-    .info-box {
-        background: linear-gradient(145deg, #1a1d29, #0d0f14);
+    /* Alert boxes */
+    .alert-box {
+        background: linear-gradient(145deg, #ff4444, #cc0000);
         padding: 15px;
         border-radius: 10px;
-        border-left: 4px solid #2d5cff;
+        color: white;
+        font-weight: 600;
+        margin: 10px 0;
+    }
+    
+    .opportunity-box {
+        background: linear-gradient(145deg, #00ff88, #00cc66);
+        padding: 15px;
+        border-radius: 10px;
+        color: black;
+        font-weight: 600;
         margin: 10px 0;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# CACHED DATA FUNCTIONS - IMPROVED WITH BETTER ERROR HANDLING
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def is_market_open():
+    """Check if US stock market is currently open"""
+    try:
+        ny_tz = pytz.timezone('America/New_York')
+        now = datetime.now(ny_tz)
+        
+        # Check if weekend
+        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return False
+        
+        # Check if within trading hours (9:30 AM - 4:00 PM ET)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        
+        return market_open <= now <= market_close
+    except:
+        return False
+
+# ============================================================================
+# CACHED DATA FUNCTIONS
 # ============================================================================
 
 @st.cache_data(ttl=60)
@@ -110,7 +143,6 @@ def fetch_ticker_data_reliable(ticker):
     """Fetch single ticker data using Ticker.history() method - more reliable"""
     try:
         stock = yf.Ticker(ticker)
-        # Use history method instead of download
         hist = stock.history(period='5d')
         
         if hist.empty:
@@ -128,7 +160,6 @@ def fetch_ticker_data_reliable(ticker):
             'success': True
         }
     except Exception as e:
-        st.error(f"Error fetching {ticker}: {str(e)}")
         return {'price': 0, 'change_pct': 0, 'volume': 0, 'success': False}
 
 @st.cache_data(ttl=60)
@@ -164,7 +195,6 @@ def fetch_watchlist_data(tickers):
             day_low = hist['Low'].iloc[-1] if 'Low' in hist.columns else current_price
             day_high = hist['High'].iloc[-1] if 'High' in hist.columns else current_price
             
-            # Calculate RSI
             rsi_value = calculate_rsi(hist['Close'])
             
             results.append({
@@ -208,7 +238,7 @@ def fetch_spx_options_data():
         total_put_oi = puts['openInterest'].sum()
         put_call_oi_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
         
-        # Get max pain (strike with most open interest)
+        # Get max pain
         calls_oi = calls.groupby('strike')['openInterest'].sum()
         puts_oi = puts.groupby('strike')['openInterest'].sum()
         total_oi = calls_oi.add(puts_oi, fill_value=0)
@@ -231,7 +261,6 @@ def fetch_spx_options_data():
             'total_put_volume': total_put_volume
         }
     except Exception as e:
-        st.error(f"SPX options data unavailable: {str(e)}")
         return None
 
 @st.cache_data(ttl=60)
@@ -358,7 +387,6 @@ def fetch_crypto_data(cryptos):
             day_low = hist['Low'].iloc[-1] if 'Low' in hist.columns else current_price
             day_high = hist['High'].iloc[-1] if 'High' in hist.columns else current_price
             
-            # Calculate RSI
             rsi_value = calculate_rsi(hist['Close'])
             
             results.append({
@@ -374,61 +402,104 @@ def fetch_crypto_data(cryptos):
     
     return pd.DataFrame(results)
 
-@st.cache_data(ttl=300)
-def fetch_polymarket_data():
-    """Fetch Polymarket trending markets"""
+@st.cache_data(ttl=180)
+def fetch_polymarket_advanced_analytics():
+    """
+    Fetch Polymarket markets and analyze for:
+    - Unusual volume activity
+    - Mispriced contracts
+    - High liquidity opportunities
+    - Insider activity signals
+    """
     try:
-        url = "https://clob.polymarket.com/markets"
-        response = requests.get(url, timeout=10)
+        # Fetch markets sorted by volume
+        url = "https://gamma-api.polymarket.com/markets"
+        params = {
+            'limit': 100,
+            'active': 'true',
+            'closed': 'false'
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
         
         if response.status_code != 200:
-            return create_sample_polymarket_data()
+            return None
         
-        data = response.json()
+        markets = response.json()
         
-        results = []
-        for market in data[:8]:
-            question = market.get('question', 'N/A')
-            outcomes = market.get('outcomes', ['Yes', 'No'])
-            outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
-            
+        opportunities = []
+        
+        for market in markets:
             try:
-                yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0.5
-                no_price = float(outcome_prices[1]) if len(outcome_prices) > 1 else 0.5
+                question = market.get('question', '')
+                market_slug = market.get('slug', '')
+                volume = float(market.get('volume', 0))
+                volume_24h = float(market.get('volume24hr', 0))
+                liquidity = float(market.get('liquidity', 0))
+                
+                # Get outcome prices
+                outcomes = market.get('outcomes', ['Yes', 'No'])
+                outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
+                
+                try:
+                    yes_price = float(outcome_prices[0])
+                    no_price = float(outcome_prices[1])
+                except:
+                    yes_price = 0.5
+                    no_price = 0.5
+                
+                # Calculate analytics
+                total_prob = yes_price + no_price
+                prob_deviation = abs(1.0 - total_prob)  # Should sum to 1.0
+                
+                # Volume velocity (24h volume as % of total)
+                volume_velocity = (volume_24h / volume * 100) if volume > 0 else 0
+                
+                # Liquidity score
+                liquidity_score = liquidity / 1000  # Normalize
+                
+                # Edge detection (mispricing)
+                # If probabilities don't sum to 100%, there's arbitrage
+                edge_score = prob_deviation * 100
+                
+                # Activity score (high recent volume = potential insider info)
+                activity_score = volume_velocity if volume_24h > 1000 else 0
+                
+                # Opportunity score (weighted combination)
+                opportunity_score = (
+                    (edge_score * 3) +           # Mispricing is most valuable
+                    (activity_score * 2) +       # Unusual activity is important
+                    (liquidity_score * 1)        # Liquidity enables trading
+                )
+                
+                # Only include markets with meaningful metrics
+                if volume > 100 and (edge_score > 0.1 or activity_score > 5 or liquidity > 500):
+                    opportunities.append({
+                        'question': question[:60] + '...' if len(question) > 60 else question,
+                        'slug': market_slug,
+                        'yes_price': yes_price * 100,
+                        'no_price': no_price * 100,
+                        'volume': volume,
+                        'volume_24h': volume_24h,
+                        'liquidity': liquidity,
+                        'edge_score': edge_score,
+                        'activity_score': activity_score,
+                        'opportunity_score': opportunity_score,
+                        'prob_sum': total_prob * 100
+                    })
             except:
-                yes_price = 0.5
-                no_price = 0.5
-            
-            results.append({
-                'Event': question[:50] + '...' if len(question) > 50 else question,
-                'Yes': yes_price * 100,
-                'No': no_price * 100
-            })
+                continue
         
-        if not results:
-            return create_sample_polymarket_data()
-            
-        return pd.DataFrame(results)
+        if not opportunities:
+            return None
+        
+        # Sort by opportunity score
+        opportunities_sorted = sorted(opportunities, key=lambda x: x['opportunity_score'], reverse=True)
+        
+        return opportunities_sorted[:10]
         
     except Exception as e:
-        return create_sample_polymarket_data()
-
-def create_sample_polymarket_data():
-    """Create sample data when API is unavailable"""
-    return pd.DataFrame({
-        'Event': [
-            'Presidential Election 2024',
-            'Fed Rate Cut March 2025',
-            'Bitcoin above $100k EOY',
-            'Recession in 2025',
-            'AI Breakthrough 2025',
-            'Ukraine Conflict End',
-            'Market Correction',
-            'Tech M&A Deal'
-        ],
-        'Yes': [52.3, 78.5, 45.2, 34.8, 61.9, 28.3, 42.1, 55.7],
-        'No': [47.7, 21.5, 54.8, 65.2, 38.1, 71.7, 57.9, 44.3]
-    })
+        return None
 
 @st.cache_data(ttl=60)
 def fetch_candlestick_data(ticker, period='3mo'):
@@ -513,6 +584,11 @@ with tab1:
     # SPX OPTIONS ANALYTICS SECTION
     st.subheader("🎯 SPX Options Intelligence")
     
+    market_is_open = is_market_open()
+    
+    if not market_is_open:
+        st.warning("⏰ **Markets Closed** - SPX options data only available during trading hours (Mon-Fri 9:30 AM - 4:00 PM ET)")
+    
     with st.spinner('Analyzing SPX options flow...'):
         spx_data = fetch_spx_options_data()
     
@@ -561,7 +637,6 @@ with tab1:
         col_vol1, col_vol2 = st.columns(2)
         
         with col_vol1:
-            # Options Volume Distribution
             fig_volume = go.Figure(data=[
                 go.Bar(name='Calls', x=['Volume'], y=[spx_data['total_call_volume']], marker_color='#00ff88'),
                 go.Bar(name='Puts', x=['Volume'], y=[spx_data['total_put_volume']], marker_color='#ff4444')
@@ -578,7 +653,6 @@ with tab1:
             st.plotly_chart(fig_volume, use_container_width=True)
         
         with col_vol2:
-            # IV Skew
             calls_top = spx_data['calls'].nlargest(10, 'volume')
             puts_top = spx_data['puts'].nlargest(10, 'volume')
             
@@ -609,7 +683,10 @@ with tab1:
             )
             st.plotly_chart(fig_iv, use_container_width=True)
     else:
-        st.info("SPX options data temporarily unavailable")
+        if market_is_open:
+            st.info("SPX options data temporarily unavailable - retrying...")
+        else:
+            st.info("💤 Markets closed. SPX options data will be available during trading hours.")
     
     st.divider()
     
@@ -729,50 +806,134 @@ with tab3:
             st.error("Unable to load crypto data")
     
     with col2:
-        st.subheader("🎲 Polymarket Prediction Markets")
+        st.subheader("🎲 Market Sentiment Overview")
         
-        with st.spinner('Loading prediction markets...'):
-            poly_df = fetch_polymarket_data()
+        # Simple overview chart - this will be expanded below
+        st.info("📊 See detailed Polymarket analytics below ⬇️")
+    
+    st.divider()
+    
+    # ADVANCED POLYMARKET ANALYTICS SECTION
+    st.subheader("🔥 Polymarket Alpha: Top 10 Trading Opportunities")
+    st.caption("Analyzing markets for mispriced contracts, unusual activity, and insider signals")
+    
+    with st.spinner('Analyzing Polymarket markets...'):
+        poly_opportunities = fetch_polymarket_advanced_analytics()
+    
+    if poly_opportunities:
+        # Create detailed table
+        display_data = []
+        for opp in poly_opportunities:
+            display_data.append({
+                'Event': opp['question'],
+                'Yes %': f"{opp['yes_price']:.1f}%",
+                'No %': f"{opp['no_price']:.1f}%",
+                'Volume': f"${opp['volume']:,.0f}",
+                '24h Vol': f"${opp['volume_24h']:,.0f}",
+                'Liquidity': f"${opp['liquidity']:,.0f}",
+                'Edge': f"{opp['edge_score']:.2f}%",
+                'Activity': f"{opp['activity_score']:.1f}",
+                'Score': f"{opp['opportunity_score']:.1f}"
+            })
         
-        if not poly_df.empty:
-            fig = go.Figure()
-            
-            fig.add_trace(go.Bar(
-                name='Yes',
-                y=poly_df['Event'],
-                x=poly_df['Yes'],
-                orientation='h',
-                marker=dict(color='#00ff88'),
-                text=poly_df['Yes'].apply(lambda x: f'{x:.1f}%'),
-                textposition='inside',
-                hovertemplate='<b>%{y}</b><br>Yes: %{x:.1f}%<extra></extra>'
-            ))
-            
-            fig.add_trace(go.Bar(
-                name='No',
-                y=poly_df['Event'],
-                x=poly_df['No'],
-                orientation='h',
-                marker=dict(color='#ff4444'),
-                text=poly_df['No'].apply(lambda x: f'{x:.1f}%'),
-                textposition='inside',
-                hovertemplate='<b>%{y}</b><br>No: %{x:.1f}%<extra></extra>'
-            ))
-            
-            fig.update_layout(
-                barmode='stack',
+        df_poly = pd.DataFrame(display_data)
+        
+        # Display table
+        st.dataframe(df_poly, use_container_width=True, height=400)
+        
+        st.caption("""
+        **Metrics Explained:**  
+        • **Edge**: Probability mispricing (higher = arbitrage opportunity)  
+        • **Activity**: 24h volume velocity (higher = unusual activity/potential insider info)  
+        • **Score**: Overall opportunity rating (edge × 3 + activity × 2 + liquidity)
+        """)
+        
+        # Visualizations
+        col_viz1, col_viz2 = st.columns(2)
+        
+        with col_viz1:
+            # Top opportunities by score
+            top_5 = poly_opportunities[:5]
+            fig_opp = go.Figure(data=[
+                go.Bar(
+                    x=[opp['opportunity_score'] for opp in top_5],
+                    y=[opp['question'][:40] + '...' for opp in top_5],
+                    orientation='h',
+                    marker=dict(
+                        color=[opp['opportunity_score'] for opp in top_5],
+                        colorscale='Viridis',
+                        showscale=True
+                    ),
+                    text=[f"{opp['opportunity_score']:.1f}" for opp in top_5],
+                    textposition='outside'
+                )
+            ])
+            fig_opp.update_layout(
+                title="Top 5 Opportunities (by Score)",
                 template='plotly_dark',
-                height=400,
-                showlegend=True,
-                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                height=350,
+                showlegend=False,
                 margin=dict(l=0, r=0, t=40, b=0),
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                xaxis=dict(showgrid=True, gridcolor='#2d3139', range=[0, 100]),
+                xaxis=dict(showgrid=True, gridcolor='#2d3139', title="Opportunity Score"),
                 yaxis=dict(showgrid=False)
             )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig_opp, use_container_width=True)
+        
+        with col_viz2:
+            # Activity vs Edge scatter
+            fig_scatter = go.Figure(data=[
+                go.Scatter(
+                    x=[opp['edge_score'] for opp in poly_opportunities],
+                    y=[opp['activity_score'] for opp in poly_opportunities],
+                    mode='markers',
+                    marker=dict(
+                        size=[min(opp['liquidity']/100, 50) for opp in poly_opportunities],
+                        color=[opp['opportunity_score'] for opp in poly_opportunities],
+                        colorscale='Plasma',
+                        showscale=True,
+                        colorbar=dict(title="Score")
+                    ),
+                    text=[opp['question'][:40] for opp in poly_opportunities],
+                    hovertemplate='<b>%{text}</b><br>Edge: %{x:.2f}%<br>Activity: %{y:.1f}<extra></extra>'
+                )
+            ])
+            fig_scatter.update_layout(
+                title="Edge vs Activity (size = liquidity)",
+                template='plotly_dark',
+                height=350,
+                margin=dict(l=0, r=0, t=40, b=0),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(showgrid=True, gridcolor='#2d3139', title="Edge (Mispricing %)"),
+                yaxis=dict(showgrid=True, gridcolor='#2d3139', title="Activity Score")
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        # Highlight best opportunities
+        st.subheader("🎯 Best Opportunities Right Now")
+        
+        best_edge = max(poly_opportunities, key=lambda x: x['edge_score'])
+        best_activity = max(poly_opportunities, key=lambda x: x['activity_score'])
+        best_overall = poly_opportunities[0]  # Already sorted by score
+        
+        col_b1, col_b2, col_b3 = st.columns(3)
+        
+        with col_b1:
+            st.markdown("**🔸 Best Mispricing**")
+            st.info(f"**{best_edge['question']}**  \nEdge: {best_edge['edge_score']:.2f}%  \nYes: {best_edge['yes_price']:.1f}% | No: {best_edge['no_price']:.1f}%")
+        
+        with col_b2:
+            st.markdown("**🔸 Highest Activity**")
+            st.warning(f"**{best_activity['question']}**  \nActivity: {best_activity['activity_score']:.1f}  \n24h Vol: ${best_activity['volume_24h']:,.0f}")
+        
+        with col_b3:
+            st.markdown("**🔸 Top Overall**")
+            st.success(f"**{best_overall['question']}**  \nScore: {best_overall['opportunity_score']:.1f}  \nVol: ${best_overall['volume']:,.0f}")
+        
+    else:
+        st.error("Unable to load Polymarket data. API may be temporarily unavailable.")
 
 # ============================================================================
 # TAB 4: CHARTS
@@ -824,4 +985,4 @@ with tab4:
 
 # Footer
 st.divider()
-st.caption("⚡ Alpha Deck v3.0 | SPX Options Analytics | Live Market Data | Not Financial Advice")
+st.caption("⚡ Alpha Deck v3.1 | SPX Options + Polymarket Analytics | Live Market Data | Not Financial Advice")
