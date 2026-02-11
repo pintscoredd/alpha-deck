@@ -9,3 +9,5 @@ lxml
 html5lib
 beautifulsoup4
 pytz
+google-generativeai
+fredapi
