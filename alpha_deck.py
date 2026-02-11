@@ -24,25 +24,57 @@ st.set_page_config(
     page_title="Alpha Deck PRO",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # ============================================================================
-# API KEYS
+# SIDEBAR - API KEY CONFIGURATION
 # ============================================================================
-GEMINI_API_KEY = "AIzaSyA19pH_uMDXEyiMUnJ5CR9PFP2wRDELrYc"
-FRED_API_KEY = "7a3a70ac26c0589b90c81a208d2b99a6"
+st.sidebar.title("🔑 API CONFIGURATION")
+st.sidebar.caption("Enter your API keys below")
+
+# Gemini API Key
+gemini_key_input = st.sidebar.text_input(
+    "Gemini API Key",
+    value="",
+    type="password",
+    help="Get free key: https://makersuite.google.com/app/apikey"
+)
+
+# FRED API Key
+fred_key_input = st.sidebar.text_input(
+    "FRED API Key",
+    value="",
+    type="password",
+    help="Get free key: https://fredaccount.stlouisfed.org/apikeys"
+)
+
+st.sidebar.markdown("---")
+st.sidebar.caption("💡 Keys are stored in session only")
+st.sidebar.caption("🔒 Never shared or saved")
+
+# Use sidebar input, fallback to secrets, then defaults
+GEMINI_API_KEY = gemini_key_input or st.secrets.get("GEMINI_API_KEY", "AIzaSyA19pH_uMDXEyiMUnJ5CR9PFP2wRDELrYc")
+FRED_API_KEY = fred_key_input or st.secrets.get("FRED_API_KEY", "7a3a70ac26c0589b90c81a208d2b99a6")
 
 # Configure APIs
 try:
-    genai.configure(api_key=GEMINI_API_KEY)
-except:
-    pass
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        st.sidebar.success("✅ Gemini Connected")
+    else:
+        st.sidebar.warning("⚠️ Gemini: No API Key")
+except Exception as e:
+    st.sidebar.error("❌ Gemini: Invalid Key")
 
 try:
-    fred = Fred(api_key=FRED_API_KEY)
-except:
-    pass
+    if FRED_API_KEY:
+        fred = Fred(api_key=FRED_API_KEY)
+        st.sidebar.success("✅ FRED Connected")
+    else:
+        st.sidebar.warning("⚠️ FRED: No API Key")
+except Exception as e:
+    st.sidebar.error("❌ FRED: Invalid Key")
 
 # ============================================================================
 # AMBER TERMINAL THEME CSS
@@ -56,6 +88,16 @@ st.markdown("""
     
     .main, .block-container, section {
         background-color: #000000 !important;
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #0a0a0a !important;
+        border-right: 2px solid #FFB000 !important;
+    }
+    
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+        color: #FFB000 !important;
     }
     
     /* Terminal Font for Tables */
@@ -125,6 +167,17 @@ st.markdown("""
         font-family: 'Courier New', Courier, monospace !important;
     }
     
+    /* Links - Amber */
+    a {
+        color: #FFB000 !important;
+        text-decoration: none !important;
+    }
+    
+    a:hover {
+        color: #FFC933 !important;
+        text-decoration: underline !important;
+    }
+    
     /* Dividers */
     hr {
         border-color: #FFB000 !important;
@@ -157,6 +210,14 @@ st.markdown("""
     /* Info/Warning/Error boxes */
     .stAlert {
         background-color: #1a1a1a !important;
+        color: #FFB000 !important;
+        border: 1px solid #FFB000 !important;
+        font-family: 'Courier New', Courier, monospace !important;
+    }
+    
+    /* Text inputs */
+    .stTextInput > div > div > input {
+        background-color: #000000 !important;
         color: #FFB000 !important;
         border: 1px solid #FFB000 !important;
         font-family: 'Courier New', Courier, monospace !important;
@@ -271,6 +332,29 @@ def fetch_watchlist_data(tickers):
     return pd.DataFrame(results)
 
 @st.cache_data(ttl=60)
+def fetch_crypto_metrics(cryptos):
+    """Fetch crypto data as metrics (not table)"""
+    results = {}
+    for crypto_symbol in cryptos:
+        ticker = f"{crypto_symbol}-USD"
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period='5d')
+            if hist.empty:
+                continue
+            current_price = hist['Close'].iloc[-1]
+            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+            change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
+            results[crypto_symbol] = {
+                'price': float(current_price),
+                'change_pct': float(change_pct),
+                'success': True
+            }
+        except:
+            results[crypto_symbol] = {'price': 0, 'change_pct': 0, 'success': False}
+    return results
+
+@st.cache_data(ttl=60)
 def fetch_spx_options_data():
     """Fetch SPX options data"""
     try:
@@ -283,7 +367,6 @@ def fetch_spx_options_data():
         calls = opt_chain.calls
         puts = opt_chain.puts
         
-        # Calculate metrics
         total_call_volume = calls['volume'].sum()
         total_put_volume = puts['volume'].sum()
         put_call_ratio = total_put_volume / total_call_volume if total_call_volume > 0 else 0
@@ -292,13 +375,11 @@ def fetch_spx_options_data():
         total_put_oi = puts['openInterest'].sum()
         put_call_oi_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
         
-        # Max pain
         calls_oi = calls.groupby('strike')['openInterest'].sum()
         puts_oi = puts.groupby('strike')['openInterest'].sum()
         total_oi = calls_oi.add(puts_oi, fill_value=0)
         max_pain = total_oi.idxmax() if not total_oi.empty else 0
         
-        # Average IV
         avg_call_iv = calls['impliedVolatility'].mean() * 100
         avg_put_iv = puts['impliedVolatility'].mean() * 100
         
@@ -363,10 +444,11 @@ def fetch_sector_performance():
 
 @st.cache_data(ttl=300)
 def fetch_news_feeds():
-    """Fetch RSS news feeds"""
+    """Fetch RSS news feeds - INCLUDING WSJ"""
     feeds = {
         'CNBC': 'https://www.cnbc.com/id/100003114/device/rss/rss.html',
-        'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best'
+        'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
+        'WSJ': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml'
     }
     articles = []
     for source, url in feeds.items():
@@ -380,38 +462,7 @@ def fetch_news_feeds():
                 })
         except:
             pass
-    return articles[:10]
-
-@st.cache_data(ttl=60)
-def fetch_crypto_data(cryptos):
-    """Fetch crypto data"""
-    results = []
-    for crypto_symbol in cryptos:
-        ticker = f"{crypto_symbol}-USD"
-        try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period='1mo')
-            if hist.empty:
-                continue
-            current_price = hist['Close'].iloc[-1]
-            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
-            change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
-            volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
-            rsi_value = calculate_rsi(hist['Close'])
-            results.append({
-                'Ticker': crypto_symbol,
-                'Price': f"${float(current_price):,.2f}",
-                'Change %': float(change_pct),
-                'Volume': f"{int(volume)/1e6:.1f}M" if volume > 0 else "0M",
-                'RSI': float(rsi_value)
-            })
-        except:
-            continue
-    return pd.DataFrame(results)
-
-# ============================================================================
-# OPENINSIDER SCRAPING (FIXED 403)
-# ============================================================================
+    return articles[:15]  # Top 15 from all sources
 
 @st.cache_data(ttl=600)
 def fetch_insider_cluster_buys():
@@ -444,12 +495,8 @@ def fetch_insider_cluster_buys():
         
         return None
         
-    except Exception as e:
+    except:
         return None
-
-# ============================================================================
-# FRED LIQUIDITY METRICS
-# ============================================================================
 
 @st.cache_data(ttl=3600)
 def fetch_fred_liquidity():
@@ -478,10 +525,6 @@ def fetch_fred_liquidity():
             'success': False
         }
 
-# ============================================================================
-# GEMINI AI BRIEFING (FIXED - Using gemini-1.5-flash)
-# ============================================================================
-
 def generate_ai_briefing(spx_price, vix_price, put_call_ratio, news_headlines):
     """Generate AI morning briefing using Gemini 1.5 Flash"""
     try:
@@ -508,19 +551,15 @@ Be cynical, data-driven, and actionable. No fluff."""
         return response.text
         
     except Exception as e:
-        return f"⚠️ AI Briefing unavailable. Check API key configuration."
-
-# ============================================================================
-# POLYMARKET ADVANCED ANALYTICS (FIXED - WITH VISUALIZATIONS)
-# ============================================================================
+        return f"⚠️ AI Briefing unavailable. Check API key in sidebar."
 
 @st.cache_data(ttl=180)
 def fetch_polymarket_advanced_analytics():
-    """Fetch and analyze Polymarket markets - FILTERED"""
+    """Fetch and analyze Polymarket markets"""
     try:
         url = "https://gamma-api.polymarket.com/markets"
         params = {
-            'limit': 100,  # Fetch 100 to ensure enough after filtering
+            'limit': 100,
             'active': 'true',
             'closed': 'false'
         }
@@ -532,7 +571,6 @@ def fetch_polymarket_advanced_analytics():
         
         markets = response.json()
         
-        # Filter keywords
         filter_keywords = ['nfl', 'nba', 'sport', 'gaming', 'gta', 'pop culture', 
                           'music', 'twitch', 'mlb', 'nhl', 'soccer', 'football', 
                           'basketball', 'celebrity', 'movie', 'ufc', 'mma', 'tennis']
@@ -543,7 +581,6 @@ def fetch_polymarket_advanced_analytics():
             try:
                 question = market.get('question', '').lower()
                 
-                # Skip if contains filter keywords
                 if any(keyword in question for keyword in filter_keywords):
                     continue
                 
@@ -552,8 +589,6 @@ def fetch_polymarket_advanced_analytics():
                 volume_24h = float(market.get('volume24hr', 0))
                 liquidity = float(market.get('liquidity', 0))
                 
-                # Get outcome prices
-                outcomes = market.get('outcomes', ['Yes', 'No'])
                 outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
                 
                 try:
@@ -563,7 +598,6 @@ def fetch_polymarket_advanced_analytics():
                     yes_price = 0.5
                     no_price = 0.5
                 
-                # Calculate analytics
                 total_prob = yes_price + no_price
                 prob_deviation = abs(1.0 - total_prob)
                 
@@ -578,7 +612,6 @@ def fetch_polymarket_advanced_analytics():
                     (liquidity_score * 1)
                 )
                 
-                # Only include markets with meaningful metrics
                 if volume > 100 and (edge_score > 0.1 or activity_score > 5 or liquidity > 500):
                     opportunities.append({
                         'question': market.get('question', '')[:60] + '...' if len(market.get('question', '')) > 60 else market.get('question', ''),
@@ -599,7 +632,6 @@ def fetch_polymarket_advanced_analytics():
         if not opportunities:
             return None
         
-        # Sort by opportunity score
         opportunities_sorted = sorted(opportunities, key=lambda x: x['opportunity_score'], reverse=True)
         
         return opportunities_sorted[:10]
@@ -642,19 +674,22 @@ st.caption(">>> BLOOMBERG TERMINAL MODE: OPENINSIDER | FRED LIQUIDITY | GEMINI A
 st.subheader("🤖 AI MARKET BRIEFING")
 
 if st.button("⚡ GENERATE MORNING BRIEF", key="ai_brief"):
-    with st.spinner('Consulting AI...'):
-        indices = fetch_index_data()
-        spx_data = fetch_spx_options_data()
-        news = fetch_news_feeds()
-        
-        spx_price = indices.get('SPX', {}).get('price', 0)
-        vix_price = indices.get('VIX', {}).get('price', 0)
-        pc_ratio = spx_data.get('put_call_ratio', 0) if spx_data else 0
-        headlines = [article['Title'] for article in news]
-        
-        briefing = generate_ai_briefing(spx_price, vix_price, pc_ratio, headlines)
-        
-        st.markdown(f"```\n{briefing}\n```")
+    if not GEMINI_API_KEY:
+        st.warning("⚠️ Please enter your Gemini API Key in the sidebar")
+    else:
+        with st.spinner('Consulting AI...'):
+            indices = fetch_index_data()
+            spx_data = fetch_spx_options_data()
+            news = fetch_news_feeds()
+            
+            spx_price = indices.get('SPX', {}).get('price', 0)
+            vix_price = indices.get('VIX', {}).get('price', 0)
+            pc_ratio = spx_data.get('put_call_ratio', 0) if spx_data else 0
+            headlines = [article['Title'] for article in news]
+            
+            briefing = generate_ai_briefing(spx_price, vix_price, pc_ratio, headlines)
+            
+            st.markdown(f"```\n{briefing}\n```")
 
 st.divider()
 
@@ -735,7 +770,6 @@ with tab1:
         
         st.caption(f"📅 Expiration: {spx_data['expiration']}")
         
-        # Charts
         col_vol1, col_vol2 = st.columns(2)
         
         with col_vol1:
@@ -851,46 +885,49 @@ with tab2:
     with col1:
         st.subheader("🏛️ FED LIQUIDITY METRICS")
         
-        liquidity = fetch_fred_liquidity()
-        
-        if liquidity['success']:
-            met_cols = st.columns(3)
-            
-            with met_cols[0]:
-                st.metric(
-                    "10Y-2Y SPREAD",
-                    f"{liquidity['yield_spread']:.2f}%",
-                    help="Negative = Recession Signal"
-                )
-            
-            with met_cols[1]:
-                st.metric(
-                    "HY CREDIT SPREAD",
-                    f"{liquidity['credit_spread']:.2f}%",
-                    help="High = Credit Stress"
-                )
-            
-            with met_cols[2]:
-                st.metric(
-                    "FED BALANCE",
-                    f"${liquidity['fed_balance']:.2f}T",
-                    help="Total Fed Assets"
-                )
-            
-            st.markdown("---")
-            st.markdown("**ANALYSIS:**")
-            
-            if liquidity['yield_spread'] < 0:
-                st.error("⚠️ INVERTED YIELD CURVE - RECESSION RISK")
-            else:
-                st.success("✅ NORMAL YIELD CURVE")
-            
-            if liquidity['credit_spread'] > 5:
-                st.error("⚠️ ELEVATED CREDIT SPREADS - STRESS DETECTED")
-            else:
-                st.success("✅ CREDIT MARKETS STABLE")
+        if not FRED_API_KEY:
+            st.warning("⚠️ Please enter your FRED API Key in the sidebar")
         else:
-            st.error("FRED DATA UNAVAILABLE")
+            liquidity = fetch_fred_liquidity()
+            
+            if liquidity['success']:
+                met_cols = st.columns(3)
+                
+                with met_cols[0]:
+                    st.metric(
+                        "10Y-2Y SPREAD",
+                        f"{liquidity['yield_spread']:.2f}%",
+                        help="Negative = Recession Signal"
+                    )
+                
+                with met_cols[1]:
+                    st.metric(
+                        "HY CREDIT SPREAD",
+                        f"{liquidity['credit_spread']:.2f}%",
+                        help="High = Credit Stress"
+                    )
+                
+                with met_cols[2]:
+                    st.metric(
+                        "FED BALANCE",
+                        f"${liquidity['fed_balance']:.2f}T",
+                        help="Total Fed Assets"
+                    )
+                
+                st.markdown("---")
+                st.markdown("**ANALYSIS:**")
+                
+                if liquidity['yield_spread'] < 0:
+                    st.error("⚠️ INVERTED YIELD CURVE - RECESSION RISK")
+                else:
+                    st.success("✅ NORMAL YIELD CURVE")
+                
+                if liquidity['credit_spread'] > 5:
+                    st.error("⚠️ ELEVATED CREDIT SPREADS - STRESS DETECTED")
+                else:
+                    st.success("✅ CREDIT MARKETS STABLE")
+            else:
+                st.error("FRED DATA UNAVAILABLE")
     
     with col2:
         st.subheader("🕵️ INSIDER CLUSTER BUYS")
@@ -911,7 +948,8 @@ with tab2:
     
     if news:
         for article in news:
-            st.markdown(f"**[{article['Source']}]** {article['Title']}")
+            # Make news titles clickable
+            st.markdown(f"**[{article['Source']}]** [{article['Title']}]({article['Link']})")
     else:
         st.info("NO NEWS AVAILABLE")
 
@@ -919,33 +957,52 @@ with tab2:
 # TAB 3: CRYPTO & POLYMARKET
 # ============================================================================
 with tab3:
-    col1, col2 = st.columns(2)
+    # CRYPTO METRICS - 2x2 Grid (Market Pulse Style)
+    st.subheader("₿ CRYPTO MARKET PULSE")
     
-    with col1:
-        st.subheader("₿ CRYPTO WATCHLIST")
-        
-        crypto_df = fetch_crypto_data(['BTC', 'ETH', 'SOL', 'DOGE'])
-        
-        if not crypto_df.empty:
-            styled_crypto = style_dataframe(crypto_df)
-            st.dataframe(styled_crypto, use_container_width=True, height=300)
+    crypto_data = fetch_crypto_metrics(['BTC', 'ETH', 'SOL', 'DOGE'])
+    
+    # 2x2 Grid
+    row1 = st.columns(2)
+    row2 = st.columns(2)
+    
+    crypto_order = ['BTC', 'ETH', 'SOL', 'DOGE']
+    
+    for idx, crypto in enumerate(crypto_order):
+        if crypto in crypto_data and crypto_data[crypto]['success']:
+            data = crypto_data[crypto]
+            
+            if idx < 2:
+                with row1[idx]:
+                    st.metric(
+                        label=crypto,
+                        value=f"${data['price']:,.2f}",
+                        delta=f"{data['change_pct']:+.2f}%"
+                    )
+            else:
+                with row2[idx - 2]:
+                    st.metric(
+                        label=crypto,
+                        value=f"${data['price']:,.2f}",
+                        delta=f"{data['change_pct']:+.2f}%"
+                    )
         else:
-            st.error("CRYPTO DATA UNAVAILABLE")
-    
-    with col2:
-        st.subheader("🎲 POLYMARKET OVERVIEW")
-        st.info("📊 See detailed analytics below ⬇️")
+            if idx < 2:
+                with row1[idx]:
+                    st.metric(label=crypto, value="LOADING")
+            else:
+                with row2[idx - 2]:
+                    st.metric(label=crypto, value="LOADING")
     
     st.divider()
     
-    # POLYMARKET ANALYTICS WITH VISUALIZATIONS
+    # POLYMARKET ANALYTICS
     st.subheader("🔥 POLYMARKET ALPHA: TOP 10 OPPORTUNITIES")
     st.caption("Filtered: Economics, Politics, Crypto only (No Sports/Gaming/Pop Culture)")
     
     poly_opportunities = fetch_polymarket_advanced_analytics()
     
     if poly_opportunities:
-        # Table
         display_data = []
         for opp in poly_opportunities:
             display_data.append({
@@ -962,15 +1019,12 @@ with tab3:
         df_poly = pd.DataFrame(display_data)
         st.dataframe(df_poly, use_container_width=True, height=400)
         
-        st.caption("""
-        **Metrics:** Edge = Mispricing | Activity = 24h volume velocity | Score = Overall opportunity
-        """)
+        st.caption("**Metrics:** Edge = Mispricing | Activity = 24h volume velocity | Score = Overall opportunity")
         
         # VISUALIZATIONS
         col_viz1, col_viz2 = st.columns(2)
         
         with col_viz1:
-            # Top 5 Opportunities Bar Chart
             top_5 = poly_opportunities[:5]
             fig_opp = go.Figure(data=[
                 go.Bar(
@@ -1001,7 +1055,6 @@ with tab3:
             st.plotly_chart(fig_opp, use_container_width=True)
         
         with col_viz2:
-            # Edge vs Activity Scatter
             fig_scatter = go.Figure(data=[
                 go.Scatter(
                     x=[opp['edge_score'] for opp in poly_opportunities],
@@ -1031,7 +1084,7 @@ with tab3:
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
         
-        # Best Opportunities Cards
+        # Best Opportunities
         st.subheader("🎯 BEST OPPORTUNITIES")
         
         best_edge = max(poly_opportunities, key=lambda x: x['edge_score'])
@@ -1056,7 +1109,7 @@ with tab3:
         st.error("POLYMARKET DATA UNAVAILABLE")
 
 # ============================================================================
-# TAB 4: TRADINGVIEW INTEGRATION
+# TAB 4: TRADINGVIEW
 # ============================================================================
 with tab4:
     st.subheader("📈 TRADINGVIEW ADVANCED CHARTS")
@@ -1068,7 +1121,6 @@ with tab4:
     if selected_ticker:
         tv_symbol = get_tradingview_symbol(selected_ticker)
         
-        # TradingView Widget
         tradingview_widget = f"""
         <!-- TradingView Widget BEGIN -->
         <div class="tradingview-widget-container" style="height:100%;width:100%">
@@ -1107,9 +1159,3 @@ with tab4:
         
         st.caption(f"📊 TradingView Symbol: {tv_symbol}")
         st.caption("💡 Use drawing tools, indicators, and timeframes from the chart toolbar")
-
-# ============================================================================
-# FOOTER
-# ============================================================================
-st.divider()
-st.caption("⚡ ALPHA DECK PRO v4.0 FINAL | BLOOMBERG TERMINAL | POWERED BY: OPENINSIDER • FRED • GEMINI AI • TRADINGVIEW")
