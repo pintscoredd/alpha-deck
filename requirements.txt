@@ -1,13 +1,12 @@
 streamlit
 yfinance
 pandas
+numpy
 plotly
 requests
 feedparser
-numpy
+pytz
+fredapi
+google-generativeai
 lxml
 html5lib
-beautifulsoup4
-pytz
-google-generativeai
-fredapi
