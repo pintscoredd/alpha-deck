@@ -1,5 +1,5 @@
 """
-Alpha Deck PRO v5.0 - QUANT EDITION
+Alpha Deck PRO v5.0 - QUANT EDITION (FIXED)
 Production-Grade Prediction Market Arbitrage | Card-Based UI | Macro Intelligence
 """
 
@@ -32,16 +32,16 @@ except:
     FRED_AVAILABLE = False
 
 # ============================================================================
-# PAGE CONFIG & SESSION STATE
+# PAGE CONFIG & SESSION STATE INITIALIZATION
 # ============================================================================
 st.set_page_config(
     page_title="Alpha Deck PRO v5.0",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed"  # Start collapsed
+    initial_sidebar_state="collapsed"
 )
 
-# Initialize session state
+# Initialize ALL session state variables INCLUDING API clients
 if 'selected_ticker' not in st.session_state:
     st.session_state.selected_ticker = 'SPY'
 if 'sidebar_visible' not in st.session_state:
@@ -50,6 +50,16 @@ if 'selected_sector' not in st.session_state:
     st.session_state.selected_sector = None
 if 'show_sector_drill' not in st.session_state:
     st.session_state.show_sector_drill = False
+
+# CRITICAL FIX: Store API clients in session state
+if 'gemini_api_key' not in st.session_state:
+    st.session_state.gemini_api_key = None
+if 'fred_api_key' not in st.session_state:
+    st.session_state.fred_api_key = None
+if 'fred_client' not in st.session_state:
+    st.session_state.fred_client = None
+if 'gemini_configured' not in st.session_state:
+    st.session_state.gemini_configured = False
 
 # ============================================================================
 # THEME & CUSTOM CSS
@@ -225,16 +235,6 @@ st.markdown("""
         font-family: 'Courier New', monospace;
     }
     
-    /* Sector heatmap clickable */
-    .sector-bar {
-        cursor: pointer;
-        transition: opacity 0.2s;
-    }
-    
-    .sector-bar:hover {
-        opacity: 0.8;
-    }
-    
     /* AI Briefing Box */
     .ai-briefing {
         background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
@@ -262,7 +262,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# SIDEBAR TOGGLE & API CONFIGURATION
+# SIDEBAR TOGGLE & PERSISTENT API CONFIGURATION
 # ============================================================================
 
 # Create sidebar toggle button
@@ -278,60 +278,59 @@ if st.session_state.sidebar_visible:
     st.sidebar.title("🔑 API CONFIGURATION")
     st.sidebar.caption("Professional API Management")
     
+    # Get API keys from inputs (with session state as default)
     gemini_key_input = st.sidebar.text_input(
         "Gemini API Key",
-        value="",
+        value=st.session_state.gemini_api_key if st.session_state.gemini_api_key else "",
         type="password",
         help="Get free key: https://makersuite.google.com/app/apikey"
     )
     
     fred_key_input = st.sidebar.text_input(
         "FRED API Key",
-        value="",
+        value=st.session_state.fred_api_key if st.session_state.fred_api_key else "",
         type="password",
         help="Get free key: https://fredaccount.stlouisfed.org/apikeys"
     )
     
     st.sidebar.markdown("---")
     
-    # Get API keys with fallback
-    GEMINI_API_KEY = gemini_key_input.strip() if gemini_key_input else None
-    FRED_API_KEY = fred_key_input.strip() if fred_key_input else None
+    # CRITICAL FIX: Store keys in session state
+    if gemini_key_input:
+        st.session_state.gemini_api_key = gemini_key_input.strip()
+    if fred_key_input:
+        st.session_state.fred_api_key = fred_key_input.strip()
     
-    # Configure APIs
-    gemini_configured = False
-    if GEMINI_AVAILABLE and GEMINI_API_KEY:
+    # Configure Gemini (PERSISTENT)
+    if GEMINI_AVAILABLE and st.session_state.gemini_api_key:
         try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            gemini_configured = True
+            # FIX: Updated to latest model
+            genai.configure(api_key=st.session_state.gemini_api_key)
+            st.session_state.gemini_configured = True
             st.sidebar.success("✅ Gemini: Connected")
         except Exception as e:
-            st.sidebar.error(f"❌ Gemini: {str(e)[:40]}")
-            gemini_configured = False
+            st.sidebar.error(f"❌ Gemini Error: {str(e)[:50]}")
+            st.session_state.gemini_configured = False
     else:
-        st.sidebar.warning("⚠️ Gemini: API Key Required")
-        gemini_configured = False
+        if not st.session_state.gemini_api_key:
+            st.sidebar.warning("⚠️ Gemini: API Key Required")
+        st.session_state.gemini_configured = False
     
-    fred = None
-    if FRED_AVAILABLE and FRED_API_KEY:
+    # Configure FRED (PERSISTENT)
+    if FRED_AVAILABLE and st.session_state.fred_api_key:
         try:
-            fred = Fred(api_key=FRED_API_KEY)
+            st.session_state.fred_client = Fred(api_key=st.session_state.fred_api_key)
             st.sidebar.success("✅ FRED: Connected")
         except Exception as e:
-            st.sidebar.error(f"❌ FRED: {str(e)[:40]}")
-            fred = None
+            st.sidebar.error(f"❌ FRED Error: {str(e)[:50]}")
+            st.session_state.fred_client = None
     else:
-        st.sidebar.warning("⚠️ FRED: API Key Required")
-        fred = None
+        if not st.session_state.fred_api_key:
+            st.sidebar.warning("⚠️ FRED: API Key Required")
+        st.session_state.fred_client = None
     
     st.sidebar.caption("💡 Session-only storage")
     st.sidebar.caption("🔒 Zero data retention")
-else:
-    # No sidebar - use fallback mode
-    GEMINI_API_KEY = None
-    FRED_API_KEY = None
-    gemini_configured = False
-    fred = None
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -388,7 +387,6 @@ def fetch_ticker_data_reliable(ticker):
         stock = yf.Ticker(ticker)
         hist = stock.history(period='5d')
         
-        # FIX: Use .empty instead of ambiguous boolean
         if hist.empty:
             return {'price': 0, 'change_pct': 0, 'change_abs': 0, 'volume': 0, 'success': False}
         
@@ -417,11 +415,9 @@ def calculate_rsi(prices, period=14):
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
         
-        # FIX: Avoid division by zero
         rs = gain / loss.replace(0, 1e-10)
         rsi = 100 - (100 / (1 + rs))
         
-        # FIX: Check if empty before accessing
         if rsi.empty or pd.isna(rsi.iloc[-1]):
             return 50.0
         
@@ -431,7 +427,7 @@ def calculate_rsi(prices, period=14):
 
 @st.cache_data(ttl=60)
 def fetch_watchlist_data(tickers):
-    """Fetch watchlist with technical signals - FIXED Pandas ambiguity"""
+    """Fetch watchlist with technical signals"""
     results = []
     
     for ticker in tickers:
@@ -439,7 +435,6 @@ def fetch_watchlist_data(tickers):
             stock = yf.Ticker(ticker)
             hist = stock.history(period='1mo')
             
-            # FIX: Use .empty instead of ambiguous boolean
             if hist.empty:
                 continue
             
@@ -523,7 +518,6 @@ def fetch_sector_performance():
     
     df = pd.DataFrame(results)
     
-    # FIX: Check if empty before sorting
     if not df.empty:
         return df.sort_values('Change %', ascending=False)
     
@@ -532,7 +526,6 @@ def fetch_sector_performance():
 @st.cache_data(ttl=60)
 def fetch_sector_constituents(sector_ticker):
     """Fetch top holdings for a sector ETF"""
-    # Simplified: Get related stocks for demo
     sector_stocks = {
         'XLK': ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'AMD'],
         'XLF': ['JPM', 'BAC', 'WFC', 'GS', 'MS'],
@@ -560,7 +553,6 @@ def fetch_spx_options_data():
         spx = yf.Ticker("^GSPC")
         expirations = spx.options
         
-        # FIX: Proper validation instead of ambiguous boolean
         if not expirations or len(expirations) == 0:
             return None
         
@@ -569,7 +561,6 @@ def fetch_spx_options_data():
         calls = opt_chain.calls
         puts = opt_chain.puts
         
-        # FIX: Check .empty instead of ambiguous boolean
         if calls.empty or puts.empty:
             return None
         
@@ -581,7 +572,6 @@ def fetch_spx_options_data():
         total_put_oi = int(puts['openInterest'].fillna(0).sum())
         put_call_oi_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
         
-        # Max pain
         calls_oi = calls.groupby('strike')['openInterest'].sum()
         puts_oi = puts.groupby('strike')['openInterest'].sum()
         total_oi = calls_oi.add(puts_oi, fill_value=0)
@@ -642,7 +632,7 @@ def fetch_news_feeds():
         'WSJ': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml'
     }
     articles = []
-    for source, url in feeds:
+    for source, url in feeds.items():
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:5]:
@@ -666,7 +656,6 @@ def fetch_insider_cluster_buys():
         
         tables = pd.read_html(url, header=0)
         
-        # FIX: Proper list validation
         if not tables or len(tables) == 0:
             return None
         
@@ -688,8 +677,9 @@ def fetch_insider_cluster_buys():
 
 @st.cache_data(ttl=3600)
 def fetch_fred_liquidity():
-    """Fetch Fed liquidity - FIXED with proper validation"""
-    if fred is None:
+    """Fetch Fed liquidity - FIXED with persistent client"""
+    # FIX: Use session state fred_client
+    if st.session_state.fred_client is None:
         return {
             'yield_spread': 0,
             'credit_spread': 0,
@@ -698,14 +688,13 @@ def fetch_fred_liquidity():
         }
     
     try:
-        t10y2y = fred.get_series_latest_release('T10Y2Y')
-        # FIX: Check .empty instead of ambiguous boolean
+        t10y2y = st.session_state.fred_client.get_series_latest_release('T10Y2Y')
         yield_spread = float(t10y2y.iloc[-1]) if not t10y2y.empty else 0
         
-        hy_spread = fred.get_series_latest_release('BAMLH0A0HYM2')
+        hy_spread = st.session_state.fred_client.get_series_latest_release('BAMLH0A0HYM2')
         credit_spread = float(hy_spread.iloc[-1]) if not hy_spread.empty else 0
         
-        fed_assets = fred.get_series_latest_release('WALCL')
+        fed_assets = st.session_state.fred_client.get_series_latest_release('WALCL')
         fed_balance = float(fed_assets.iloc[-1]) / 1000 if not fed_assets.empty else 0
         
         return {
@@ -714,37 +703,46 @@ def fetch_fred_liquidity():
             'fed_balance': fed_balance,
             'success': True
         }
-    except:
+    except Exception as e:
         return {
             'yield_spread': 0,
             'credit_spread': 0,
             'fed_balance': 0,
-            'success': False
+            'success': False,
+            'error': str(e)
         }
 
 @st.cache_data(ttl=60)
 def calculate_spx_crypto_correlation():
-    """Calculate SPX/ES to crypto correlation coefficients"""
+    """
+    Calculate SPX/ES to crypto correlation coefficients.
+    FIX: Handle weekend gap with proper date alignment.
+    """
     try:
         # Fetch 30 days of data
         spx = yf.Ticker('^GSPC').history(period='1mo')['Close']
         btc = yf.Ticker('BTC-USD').history(period='1mo')['Close']
         eth = yf.Ticker('ETH-USD').history(period='1mo')['Close']
         
-        # FIX: Check empty before calculating correlation
         if spx.empty or btc.empty or eth.empty:
             return {'BTC': 0, 'ETH': 0}
         
-        # Align indices
+        # FIX: Use INNER join to align only trading days where both have data
+        # This handles the weekend gap (SPX closed, crypto open)
         combined = pd.DataFrame({
             'SPX': spx,
             'BTC': btc,
             'ETH': eth
-        }).dropna()
+        })
         
-        if combined.empty or len(combined) < 2:
+        # Drop all rows with ANY NaN (inner join behavior)
+        combined = combined.dropna(how='any')
+        
+        # Need at least 10 points for meaningful correlation
+        if combined.empty or len(combined) < 10:
             return {'BTC': 0, 'ETH': 0}
         
+        # Calculate correlations
         corr_btc = combined['SPX'].corr(combined['BTC'])
         corr_eth = combined['SPX'].corr(combined['ETH'])
         
@@ -752,113 +750,50 @@ def calculate_spx_crypto_correlation():
             'BTC': float(corr_btc) if not pd.isna(corr_btc) else 0,
             'ETH': float(corr_eth) if not pd.isna(corr_eth) else 0
         }
-    except:
-        return {'BTC': 0, 'ETH': 0}
+    except Exception as e:
+        return {'BTC': 0, 'ETH': 0, 'error': str(e)}
 
 # ============================================================================
 # POLYMARKET ARBITRAGE ENGINE - PRODUCTION GRADE
 # ============================================================================
 
 class PolymarketArbitrageEngine:
-    """
-    Production-grade arbitrage detection using marginal polytope theory.
-    
-    Mathematical Framework:
-    - Marginal Polytope: M = conv(Z) where Z is valid payoff vectors
-    - Bregman Projection: D(μ||θ) = R(μ) + C(θ) - θ·μ
-    - Frank-Wolfe: Iterative projection onto polytope M
-    - Integer Programming: Constraint satisfaction for dependencies
-    
-    References:
-    - Abernethy et al. "A Collaborative Mechanism for Crowdsourcing Prediction Problems"
-    - Chen et al. "A Utility Framework for Bounded-Loss Market Makers"
-    - Dudík et al. "Maximum Entropy Density Estimation with Generalized Regularization"
-    """
+    """Production-grade arbitrage detection using marginal polytope theory"""
     
     def __init__(self, min_profit_threshold=0.05, liquidity_param=100):
-        self.min_profit_threshold = min_profit_threshold  # 5% minimum after all costs
-        self.b = liquidity_param  # LMSR liquidity parameter
+        self.min_profit_threshold = min_profit_threshold
+        self.b = liquidity_param
         
     def compute_marginal_polytope(self, outcomes):
-        """
-        Compute marginal polytope M = conv(Z).
-        
-        For binary market: Z = {(1,0), (0,1)}
-        For N outcomes: Z = {e_1, ..., e_N} (standard basis)
-        
-        Returns: ConvexHull object representing M
-        """
         n = len(outcomes)
         vertices = np.eye(n)
-        
         try:
             return ConvexHull(vertices)
         except:
             return None
     
     def check_polytope_membership(self, prices):
-        """
-        Check if price vector p ∈ M.
-        
-        Necessary conditions:
-        1. Σp_i = 1 (probability simplex)
-        2. p_i ∈ [0,1] ∀i
-        3. p lies in conv(Z)
-        
-        Returns: True if arbitrage-free, False if arbitrage exists
-        """
         if not isinstance(prices, (list, np.ndarray)):
             return True
         
         prices = np.array(prices)
         
-        # Check probability simplex
         if not np.allclose(np.sum(prices), 1.0, atol=0.02):
             return False
         
-        # Check bounds
         if np.any(prices < -0.01) or np.any(prices > 1.01):
             return False
-        
-        # For binary: automatically in polytope if above satisfied
-        # For N>2: would need full polytope check
         
         return True
     
     def compute_bregman_divergence(self, mu, theta, cost_function='lmsr'):
-        """
-        Compute Bregman divergence D(μ||θ) = R(μ) + C(θ) - θ·μ
-        
-        For LMSR market maker:
-        - R(μ) = -H(μ) = Σμ_i log(μ_i) (negative entropy)
-        - C(θ) = b log(Σexp(θ_i/b))
-        - D(μ||θ) quantifies mispricing vs equilibrium
-        
-        Args:
-            mu: Current market probabilities
-            theta: Optimal log-odds parameters
-            cost_function: Market maker type ('lmsr', 'quadratic')
-        
-        Returns: Bregman divergence (higher = more arbitrage)
-        """
         if cost_function == 'lmsr':
-            # Regularizer: negative entropy
             mu_safe = np.clip(mu, 1e-10, 1 - 1e-10)
             R_mu = -np.sum(mu_safe * np.log(mu_safe))
             
-            # Cost function
             theta_safe = np.clip(theta, -100, 100)
             C_theta = self.b * np.log(np.sum(np.exp(theta_safe / self.b)))
             
-            # Bregman divergence
-            divergence = R_mu + C_theta - np.dot(theta, mu)
-            
-            return float(divergence)
-        
-        elif cost_function == 'quadratic':
-            # Quadratic cost: C(θ) = (1/2)||θ||²
-            R_mu = -np.sum(mu_safe * np.log(mu_safe))
-            C_theta = 0.5 * np.dot(theta, theta)
             divergence = R_mu + C_theta - np.dot(theta, mu)
             
             return float(divergence)
@@ -866,48 +801,22 @@ class PolymarketArbitrageEngine:
         return 0.0
     
     def frank_wolfe_projection(self, prices, max_iter=100, tolerance=1e-6):
-        """
-        Frank-Wolfe algorithm for projecting prices onto polytope M.
-        
-        Algorithm:
-        1. Initialize μ⁰ = prices (normalized)
-        2. For t = 1, ..., T:
-            a. Compute gradient: ∇f(μᵗ) = log(μᵗ) + 1
-            b. LP oracle: find vertex v* = argmin <∇f(μᵗ), v>
-            c. Line search: γ* ∈ [0,1]
-            d. Update: μᵗ⁺¹ = (1-γ*)μᵗ + γ*v*
-        3. Return: Projected prices μ*
-        
-        Args:
-            prices: Current market prices
-            max_iter: Maximum iterations
-            tolerance: Convergence threshold
-        
-        Returns: Optimal prices μ* ∈ M
-        """
         n = len(prices)
-        mu = np.array(prices) / (np.sum(prices) + 1e-10)  # Normalize
+        mu = np.array(prices) / (np.sum(prices) + 1e-10)
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         
         for iteration in range(max_iter):
-            # Gradient of negative entropy regularizer
             grad = np.log(mu) + 1
             
-            # LP oracle: min <grad, v> where v ∈ {e_1, ..., e_n}
-            # Solution: v* = e_i where i = argmin grad_i
             vertex_idx = np.argmin(grad)
             vertex = np.zeros(n)
             vertex[vertex_idx] = 1.0
             
-            # Line search with optimal step size
-            # For entropy: γ* = 2/(t+2) is proven optimal
             gamma = 2.0 / (iteration + 2.0)
             
-            # Update
             mu_new = (1 - gamma) * mu + gamma * vertex
             mu_new = np.clip(mu_new, 1e-10, 1 - 1e-10)
             
-            # Check convergence
             if np.linalg.norm(mu_new - mu) < tolerance:
                 break
             
@@ -916,24 +825,6 @@ class PolymarketArbitrageEngine:
         return mu
     
     def detect_dependency_arbitrage(self, markets, max_pairs=100):
-        """
-        Integer Programming approach to detect dependency violations.
-        
-        Theory:
-        - If event A implies event B, then P(A) ≤ P(B)
-        - If P(A) > P(B) + ε, arbitrage exists
-        - Strategy: Short A, Long B
-        
-        Constraints (General):
-        - A_ij p_j ≤ b_i for dependency constraints
-        - Solved via Linear Programming / Integer Programming
-        
-        Args:
-            markets: List of market dictionaries
-            max_pairs: Limit to prevent exponential blowup
-        
-        Returns: List of dependency arbitrage opportunities
-        """
         arbitrage_opportunities = []
         pairs_checked = 0
         
@@ -947,16 +838,13 @@ class PolymarketArbitrageEngine:
                 q1 = market1.get('question', '').lower()
                 q2 = market2.get('question', '').lower()
                 
-                # Detect subset relationships via keyword overlap
                 if self._detect_implication(q1, q2):
                     p1 = market1.get('yes_price', 0.5)
                     p2 = market2.get('yes_price', 0.5)
                     
-                    # Constraint violation: P(A) > P(B) when A ⊆ B
-                    if p1 > p2 + 0.03:  # 3% threshold
+                    if p1 > p2 + 0.03:
                         gross_profit = p1 - p2
                         
-                        # Account for execution costs
                         execution_costs = self._estimate_execution_costs(
                             market1.get('liquidity', 1000),
                             market1.get('volume', 100)
@@ -983,17 +871,6 @@ class PolymarketArbitrageEngine:
         return arbitrage_opportunities
     
     def _detect_implication(self, event1, event2):
-        """
-        Heuristic to detect if event1 ⊆ event2 (event1 implies event2).
-        
-        Methods:
-        1. Keyword overlap (Jaccard similarity > 0.7)
-        2. Substring matching
-        3. Temporal constraints (e.g., "before March" ⊆ "in 2025")
-        
-        Returns: True if implication detected
-        """
-        # Method 1: Jaccard similarity
         words1 = set(event1.split())
         words2 = set(event2.split())
         
@@ -1006,14 +883,12 @@ class PolymarketArbitrageEngine:
         if jaccard > 0.7:
             return True
         
-        # Method 2: Substring
         if event1 in event2 or event2 in event1:
             return True
         
         return False
     
     def _compute_confidence(self, event1, event2):
-        """Compute confidence in implication detection (0-1)"""
         words1 = set(event1.split())
         words2 = set(event2.split())
         
@@ -1028,34 +903,16 @@ class PolymarketArbitrageEngine:
         return float(jaccard)
     
     def _estimate_execution_costs(self, liquidity, volume):
-        """
-        Estimate realistic execution costs using VWAP model.
-        
-        Components:
-        1. Slippage: sqrt(trade_size / liquidity) × base_slippage
-        2. Gas: Fixed cost per transaction
-        3. Market impact: Square root law
-        
-        Args:
-            liquidity: Market liquidity in USD
-            volume: 24h volume in USD
-        
-        Returns: Dictionary of costs
-        """
-        # Max trade size: 10% of volume or 5% of liquidity
         max_trade = min(volume * 0.10, liquidity * 0.05)
-        max_trade = max(max_trade, 100)  # Minimum $100
+        max_trade = max(max_trade, 100)
         
-        # Slippage: sqrt law
-        base_slippage = 0.005  # 0.5% base
+        base_slippage = 0.005
         slippage = base_slippage * np.sqrt(max_trade / max(liquidity, 100))
-        slippage = min(slippage, 0.05)  # Cap at 5%
+        slippage = min(slippage, 0.05)
         
-        # Gas cost
-        gas_fixed = 2.0  # $2 per transaction (Polygon)
+        gas_fixed = 2.0
         gas_pct = gas_fixed / max(max_trade, 100)
         
-        # Total
         total_cost = slippage + gas_pct
         
         return {
@@ -1066,31 +923,13 @@ class PolymarketArbitrageEngine:
         }
     
     def analyze_market(self, market_data):
-        """
-        Comprehensive arbitrage analysis for single market.
-        
-        Pipeline:
-        1. Check polytope membership
-        2. Compute Bregman divergence
-        3. Project to optimal prices via Frank-Wolfe
-        4. Estimate execution costs
-        5. Calculate net profit
-        
-        Args:
-            market_data: Market dictionary with prices, volume, liquidity
-        
-        Returns: Analysis dictionary or None
-        """
         try:
             outcome_prices = market_data.get('outcomePrices', ['0.5', '0.5'])
             prices = np.array([float(p) for p in outcome_prices])
             
-            # 1. Polytope membership
             is_valid = self.check_polytope_membership(prices)
             
-            # 2. Compute log-odds and Bregman divergence
             if len(prices) == 2:
-                # Binary market
                 p = prices[0]
                 p_safe = np.clip(p, 0.01, 0.99)
                 theta = np.array([np.log(p_safe / (1 - p_safe)), 0])
@@ -1100,16 +939,13 @@ class PolymarketArbitrageEngine:
             else:
                 divergence = 0
             
-            # 3. Project to optimal
             optimal_prices = self.frank_wolfe_projection(prices)
             
-            # 4. Execution costs
             execution = self._estimate_execution_costs(
                 market_data.get('liquidity', 1000),
                 market_data.get('volume', 100)
             )
             
-            # 5. Compute net profit
             price_deviation = np.abs(prices - optimal_prices).max()
             gross_profit = price_deviation
             net_profit = gross_profit - execution['total']
@@ -1133,13 +969,14 @@ class PolymarketArbitrageEngine:
             return None
 
 # ============================================================================
-# POLYMARKET DATA FETCH - PRODUCTION
+# POLYMARKET DATA FETCH - FIXED
 # ============================================================================
 
 @st.cache_data(ttl=180)
 def fetch_polymarket_with_arbitrage():
     """
     Fetch Polymarket data with production-grade arbitrage detection.
+    FIX: Handle null values in liquidity and volume.
     
     Returns: (opportunities_df, arbitrage_df)
     """
@@ -1163,7 +1000,6 @@ def fetch_polymarket_with_arbitrage():
                           'music', 'twitch', 'mlb', 'nhl', 'soccer', 'football',
                           'basketball', 'celebrity', 'movie', 'ufc', 'mma', 'tennis']
         
-        # Initialize arbitrage engine
         arb_engine = PolymarketArbitrageEngine(min_profit_threshold=0.05)
         
         opportunities = []
@@ -1173,17 +1009,23 @@ def fetch_polymarket_with_arbitrage():
             try:
                 question = market.get('question', '').lower()
                 
-                # Filter
                 if any(kw in question for kw in filter_keywords):
                     continue
                 
                 slug = market.get('slug', '')
-                volume = float(market.get('volume', 0))
-                liquidity = float(market.get('liquidity', 0))
-                outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
-                yes_price = float(outcome_prices[0])
                 
-                # Prepare for analysis
+                # FIX: Handle null values with default 0
+                volume = float(market.get('volume') or 0)
+                liquidity = float(market.get('liquidity') or 0)
+                
+                outcome_prices = market.get('outcomePrices', ['0.5', '0.5'])
+                
+                # FIX: Handle empty or null outcomePrices
+                if not outcome_prices or len(outcome_prices) == 0:
+                    outcome_prices = ['0.5', '0.5']
+                
+                yes_price = float(outcome_prices[0] or 0.5)
+                
                 market_full = {
                     'question': market.get('question', ''),
                     'slug': slug,
@@ -1193,7 +1035,6 @@ def fetch_polymarket_with_arbitrage():
                     'liquidity': liquidity
                 }
                 
-                # Run arbitrage analysis
                 arb_analysis = arb_engine.analyze_market(market_full)
                 
                 if arb_analysis and arb_analysis['is_profitable']:
@@ -1218,21 +1059,32 @@ def fetch_polymarket_with_arbitrage():
                         'Arb Score': arb_analysis['bregman_divergence'] if arb_analysis else 0
                     })
             
-            except:
+            except Exception as e:
+                # Skip problematic markets
                 continue
         
         # Detect dependency arbitrage
-        markets_clean = [
-            {
-                'question': m.get('question', ''),
-                'slug': m.get('slug', ''),
-                'yes_price': float(m.get('outcomePrices', ['0.5'])[0]),
-                'liquidity': float(m.get('liquidity', 1000)),
-                'volume': float(m.get('volume', 100))
-            }
-            for m in markets
-            if not any(kw in m.get('question', '').lower() for kw in filter_keywords)
-        ]
+        markets_clean = []
+        for m in markets:
+            try:
+                if any(kw in m.get('question', '').lower() for kw in filter_keywords):
+                    continue
+                
+                outcome_prices = m.get('outcomePrices', ['0.5'])
+                if not outcome_prices or len(outcome_prices) == 0:
+                    yes_price = 0.5
+                else:
+                    yes_price = float(outcome_prices[0] or 0.5)
+                
+                markets_clean.append({
+                    'question': m.get('question', ''),
+                    'slug': m.get('slug', ''),
+                    'yes_price': yes_price,
+                    'liquidity': float(m.get('liquidity') or 1000),
+                    'volume': float(m.get('volume') or 100)
+                })
+            except:
+                continue
         
         dep_arbs = arb_engine.detect_dependency_arbitrage(markets_clean)
         
@@ -1258,31 +1110,26 @@ def fetch_polymarket_with_arbitrage():
         return opp_df, arb_df
     
     except Exception as e:
+        # Return empty DataFrames on error
         return pd.DataFrame(), pd.DataFrame()
 
 # ============================================================================
-# AI MACRO BRIEFING - ENHANCED
+# AI MACRO BRIEFING - FIXED
 # ============================================================================
 
 def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correlations):
     """
     Generate high-density macro-economic intelligence.
-    
-    Focus Areas:
-    1. Yield curve positioning and Fed trajectory
-    2. SPX/Crypto correlation dynamics
-    3. Liquidity cycle impact on prediction markets
-    4. Key levels for SPX with probability bands
-    
-    Output: Paragraph format for digestibility
+    FIX: Use session state gemini_configured and updated model.
     """
-    if not gemini_configured:
+    # FIX: Use session state variable
+    if not st.session_state.gemini_configured:
         return "⚠️ **Gemini API Configuration Required** — Enable API access in sidebar to unlock macro intelligence. This analysis requires real-time AI processing for yield curve interpretation, correlation regime detection, and liquidity cycle forecasting."
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # FIX: Updated to latest model (gemini-2.0-flash-exp or gemini-1.5-flash)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
-        # Prepare macro context
         spx_price = indices.get('SPX', {}).get('price', 0)
         vix_price = indices.get('VIX', {}).get('price', 0)
         pc_ratio = spx_options.get('put_call_ratio', 0) if spx_options else 0
@@ -1295,7 +1142,6 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
         corr_btc = correlations.get('BTC', 0)
         corr_eth = correlations.get('ETH', 0)
         
-        # Yield curve context
         if yield_spread < 0:
             yc_context = f"inverted by {abs(yield_spread):.2f}% (recession signal active)"
         elif yield_spread < 0.25:
@@ -1303,7 +1149,6 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
         else:
             yc_context = f"normalized at {yield_spread:.2f}% (expansion intact)"
         
-        # Construct enhanced prompt
         prompt = f"""You are a macro strategist at a quantitative hedge fund. Generate a dense, specific macro briefing (200-250 words, paragraph format).
 
 **Market State:**
@@ -1330,7 +1175,9 @@ Write in dense prose (no bullets), use specific numbers, avoid generic statement
         return response.text
     
     except Exception as e:
-        return f"⚠️ **AI Generation Error** — {str(e)[:150]}. Verify API key validity and quota limits. The model requires access to generate custom macro intelligence tailored to current market conditions."
+        # FIX: Display actual error message for debugging
+        error_msg = str(e)
+        return f"⚠️ **AI Generation Error** — {error_msg[:200]}... \n\nPossible issues:\n- API key invalid or expired\n- Quota exceeded\n- Model unavailable\n\nVerify your Gemini API key in the sidebar and check console for details."
 
 # ============================================================================
 # UI COMPONENTS - CARD-BASED LAYOUTS
@@ -1342,7 +1189,6 @@ def render_metric_card(label, value, change_pct, change_abs, signals=None):
     change_class = "positive" if change_pct >= 0 else "negative"
     change_symbol = "+" if change_pct >= 0 else ""
     
-    # Format absolute change
     if "SPX" in label or "NDX" in label:
         abs_str = f"{change_symbol}{change_abs:.2f} pts"
     elif "$" in str(value):
@@ -1372,12 +1218,10 @@ def render_metric_card(label, value, change_pct, change_abs, signals=None):
 def render_watchlist_cards(df):
     """Render watchlist as card grid - NO EXCEL TABLES"""
     
-    # FIX: Check .empty instead of ambiguous boolean
     if df.empty:
         st.warning("📊 Watchlist data unavailable")
         return
     
-    # Create 3-column grid
     cols_per_row = 3
     
     for i in range(0, len(df), cols_per_row):
@@ -1402,10 +1246,9 @@ def render_watchlist_cards(df):
 def render_interactive_sector_heatmap(sector_df):
     """
     Interactive sector heatmap with drill-down capability.
-    Click a sector to see constituent stocks.
+    FIX: 2 rows of 5 columns with shortened names.
     """
     
-    # FIX: Check .empty instead of ambiguous boolean
     if sector_df.empty:
         st.warning("📊 Sector data unavailable")
         return
@@ -1420,7 +1263,7 @@ def render_interactive_sector_heatmap(sector_df):
         color_continuous_scale=[[0, '#FF0000'], [0.5, '#000000'], [1, '#00FF00']],
         color_continuous_midpoint=0,
         hover_data={'Change %': ':.2f%', 'Change $': ':.2f'},
-        custom_data=['Ticker']  # Store ticker for click handling
+        custom_data=['Ticker']
     )
     
     fig.update_traces(
@@ -1453,20 +1296,51 @@ def render_interactive_sector_heatmap(sector_df):
         )
     )
     
-    # Display chart
-    selected_sector = st.plotly_chart(fig, use_container_width=True, key="sector_heatmap")
+    st.plotly_chart(fig, use_container_width=True, key="sector_heatmap")
     
-    # Sector drill-down buttons
+    # FIX: Shorten sector names and arrange in 2 rows of 5 columns
     st.caption("🔍 **SECTOR DRILL-DOWN** — Click to view constituents")
     
-    cols = st.columns(len(sector_df))
+    sector_name_map = {
+        'Technology': 'TECH',
+        'Energy': 'ENERGY',
+        'Financials': 'FIN',
+        'Healthcare': 'HEALTH',
+        'Industrials': 'INDUST',
+        'Consumer Staples': 'STAPLES',
+        'Consumer Disc.': 'DISC',
+        'Materials': 'MATER',
+        'Real Estate': 'REAL EST',
+        'Communication': 'COMM',
+        'Utilities': 'UTIL'
+    }
     
-    for idx, (i, row) in enumerate(sector_df.iterrows()):
-        with cols[idx]:
-            if st.button(row['Sector'][:8], key=f"sector_{row['Ticker']}"):
-                st.session_state.selected_sector = row['Ticker']
-                st.session_state.show_sector_drill = True
-                st.rerun()
+    # Split sectors into 2 rows
+    sectors_list = sector_df.to_dict('records')
+    
+    # First row (5 sectors)
+    if len(sectors_list) > 0:
+        cols_row1 = st.columns(min(5, len(sectors_list)))
+        for idx in range(min(5, len(sectors_list))):
+            row = sectors_list[idx]
+            short_name = sector_name_map.get(row['Sector'], row['Sector'][:8])
+            with cols_row1[idx]:
+                if st.button(short_name, key=f"sector_{row['Ticker']}"):
+                    st.session_state.selected_sector = row['Ticker']
+                    st.session_state.show_sector_drill = True
+                    st.rerun()
+    
+    # Second row (remaining sectors)
+    if len(sectors_list) > 5:
+        cols_row2 = st.columns(min(5, len(sectors_list) - 5))
+        for idx in range(5, min(10, len(sectors_list))):
+            row = sectors_list[idx]
+            short_name = sector_name_map.get(row['Sector'], row['Sector'][:8])
+            with cols_row2[idx - 5]:
+                if st.button(short_name, key=f"sector_{row['Ticker']}"):
+                    st.session_state.selected_sector = row['Ticker']
+                    st.session_state.show_sector_drill = True
+                    st.rerun()
     
     # Show drill-down if sector selected
     if st.session_state.show_sector_drill and st.session_state.selected_sector:
@@ -1476,16 +1350,13 @@ def render_interactive_sector_heatmap(sector_df):
         st.markdown("---")
         st.subheader(f"🔬 {sector_name} — CONSTITUENT BREAKDOWN")
         
-        # Close button
         if st.button("❌ CLOSE DRILL-DOWN", key="close_drill"):
             st.session_state.show_sector_drill = False
             st.session_state.selected_sector = None
             st.rerun()
         
-        # Fetch and display constituents
         constituents = fetch_sector_constituents(sector_ticker)
         
-        # FIX: Check .empty instead of ambiguous boolean
         if not constituents.empty:
             render_watchlist_cards(constituents)
         else:
@@ -1640,7 +1511,7 @@ with tab1:
     
     st.divider()
     
-    # Sector Heatmap - INTERACTIVE
+    # Sector Heatmap - INTERACTIVE with FIXED UI
     st.subheader("🎨 SECTOR HEAT — INTERACTIVE DRILL-DOWN")
     st.caption("**Click any sector** to view constituent stocks")
     
@@ -1660,7 +1531,6 @@ with tab2:
     # Arbitrage Opportunities
     st.markdown("### 💰 ARBITRAGE TRADES")
     
-    # FIX: Check .empty instead of ambiguous boolean
     if not arb_df.empty:
         st.dataframe(
             arb_df,
@@ -1685,9 +1555,7 @@ with tab2:
     # Market Opportunities
     st.markdown("### 📊 TOP PREDICTION MARKETS")
     
-    # FIX: Check .empty instead of ambiguous boolean
     if not opp_df.empty:
-        # Format for display
         opp_display = opp_df.copy()
         opp_display['Volume'] = opp_display['Volume'].apply(
             lambda x: f"${x/1e6:.2f}M" if x >= 1e6 else f"${x/1e3:.0f}K"
@@ -1735,7 +1603,7 @@ with tab3:
     
     st.divider()
     
-    # Correlations
+    # Correlations (FIXED)
     st.subheader("🔗 SPX/CRYPTO CORRELATIONS")
     corrs = calculate_spx_crypto_correlation()
     
@@ -1754,7 +1622,7 @@ with tab3:
     
     st.divider()
     
-    # Liquidity
+    # Liquidity (FIXED - uses session state)
     st.subheader("🏛️ FED LIQUIDITY METRICS")
     
     liq = fetch_fred_liquidity()
@@ -1774,7 +1642,9 @@ with tab3:
         else:
             st.success("✅ **NORMALIZED CURVE** — Expansion intact")
     else:
-        st.warning("⚠️ FRED API: Configure in sidebar")
+        st.warning("⚠️ FRED API: Configure key in sidebar")
+        if 'error' in liq:
+            st.caption(f"Error: {liq['error']}")
 
 # ============================================================================
 # TAB 4: TRADINGVIEW
@@ -1840,5 +1710,5 @@ with tab4:
 # ============================================================================
 
 st.divider()
-st.caption("⚡ **ALPHA DECK PRO v5.0 — QUANT EDITION**")
-st.caption("Production-Grade Polymarket Arbitrage | Enhanced AI Macro Intelligence | Card-Based UI | Interactive Analytics")
+st.caption("⚡ **ALPHA DECK PRO v5.0 — QUANT EDITION (FIXED)**")
+st.caption("✅ Persistent API Clients | ✅ Fixed Polymarket | ✅ Weekend Gap Handled | ✅ Updated Gemini | ✅ Improved Sector UI")
