@@ -1,6 +1,6 @@
 """
-Alpha Deck PRO v4.0 - GOLD MASTER (ENHANCED, FIXED)
-Bloomberg-Style Trading Terminal - Deprecation fixes + institutional upgrades
+Alpha Deck PRO v4.0 - GOLD MASTER (ENHANCED, PATCHED)
+Bloomberg-Style Trading Terminal - Deprecation fixes, Gemini prompt fixed, SPX options robustness
 """
 
 import os
@@ -441,10 +441,10 @@ def check_technical_signals(row):
             signals.append("⚡ HIGH VOL")
         if abs(change_pct) > 3:
             signals.append("🚀 MOMENTUM")
-        return " | ".join(signals) if signals else "—"
+        return " | ".join(signals) if signals else "-"
     except Exception as e:
         logger.error(f"check_technical_signals error: {e}")
-        return "—"
+        return "-"
 
 # ============================================================
 # DATA FETCHING & ANALYTICS - with Redis caching wrapper
@@ -473,7 +473,7 @@ def redis_cache_wrapper(key, ttl, fetch_func, force_local=False):
 
 @st.cache_data(ttl=60)
 def fetch_ticker_data_reliable(ticker):
-    """Fetch single ticker data WITH absolute change, resilient to missing yfinance"""
+    """Fetch single ticker data with absolute change, resilient to missing yfinance"""
     try:
         if not YFINANCE_AVAILABLE:
             logger.error("yfinance not installed, please install yfinance to fetch market data")
@@ -761,6 +761,11 @@ def fetch_fred_liquidity():
 # ============================================================
 @st.cache_data(ttl=60)
 def fetch_spx_options_data():
+    """
+    Robust SPX/SPY options fetch, uses explicit DataFrame checks to avoid ambiguous truth
+    values. Tries a few Yahoo candidates until one returns a valid chain.
+    Returns structured dict with success flag and helpful debug fields.
+    """
     try:
         candidates = ["^GSPC", "^SPX", "SPY"]
         last_err = None
@@ -771,38 +776,72 @@ def fetch_spx_options_data():
                     return {'success': False, 'error': 'yfinance not installed', 'checked': candidates}
                 opt_ticker = yf.Ticker(t)
                 expirations = getattr(opt_ticker, "options", []) or []
-                if not expirations:
+                if not isinstance(expirations, (list, tuple)) or len(expirations) == 0:
                     logger.info(f"No expirations for {t}, trying next candidate")
                     continue
                 nearest_exp = expirations[0]
-                opt_chain = opt_ticker.option_chain(nearest_exp)
-                calls = getattr(opt_chain, "calls", None) or opt_chain[0]
-                puts = getattr(opt_chain, "puts", None) or opt_chain[1]
-                if (calls is None or calls.empty) and (puts is None or puts.empty):
+                try:
+                    opt_chain = opt_ticker.option_chain(nearest_exp)
+                except Exception as e:
+                    logger.warning(f"option_chain call for {t} at {nearest_exp} failed: {e}")
+                    continue
+
+                calls = None
+                puts = None
+                try:
+                    calls = getattr(opt_chain, "calls", None)
+                    puts = getattr(opt_chain, "puts", None)
+                except Exception:
+                    try:
+                        if isinstance(opt_chain, (list, tuple)) and len(opt_chain) >= 2:
+                            calls = opt_chain[0]
+                            puts = opt_chain[1]
+                    except Exception:
+                        calls = None
+                        puts = None
+
+                if calls is None or not isinstance(calls, pd.DataFrame):
+                    try:
+                        calls = pd.DataFrame(calls) if calls is not None else pd.DataFrame()
+                    except Exception:
+                        calls = pd.DataFrame()
+                if puts is None or not isinstance(puts, pd.DataFrame):
+                    try:
+                        puts = pd.DataFrame(puts) if puts is not None else pd.DataFrame()
+                    except Exception:
+                        puts = pd.DataFrame()
+
+                if calls.empty and puts.empty:
                     logger.info(f"Empty option chain for {t} at {nearest_exp}")
                     continue
+
                 calls = calls.fillna(0)
                 puts = puts.fillna(0)
+
                 total_call_volume = int(calls['volume'].fillna(0).sum()) if 'volume' in calls.columns else 0
                 total_put_volume = int(puts['volume'].fillna(0).sum()) if 'volume' in puts.columns else 0
-                put_call_ratio = (total_put_volume / total_call_volume) if total_call_volume > 0 else 0
+                put_call_ratio = (total_put_volume / total_call_volume) if total_call_volume > 0 else 0.0
+
                 total_call_oi = int(calls['openInterest'].fillna(0).sum()) if 'openInterest' in calls.columns else 0
                 total_put_oi = int(puts['openInterest'].fillna(0).sum()) if 'openInterest' in puts.columns else 0
-                put_call_oi_ratio = (total_put_oi / total_call_oi) if total_call_oi > 0 else 0
+                put_call_oi_ratio = (total_put_oi / total_call_oi) if total_call_oi > 0 else 0.0
+
                 try:
                     calls_oi = calls.groupby('strike')['openInterest'].sum() if 'openInterest' in calls.columns else pd.Series(dtype=float)
                     puts_oi = puts.groupby('strike')['openInterest'].sum() if 'openInterest' in puts.columns else pd.Series(dtype=float)
                     total_oi = calls_oi.add(puts_oi, fill_value=0)
-                    max_pain = float(total_oi.idxmax()) if not total_oi.empty else 0
+                    max_pain = float(total_oi.idxmax()) if not total_oi.empty else 0.0
                 except Exception:
-                    max_pain = 0
+                    max_pain = 0.0
+
                 try:
-                    avg_call_iv = float(calls['impliedVolatility'].replace([np.inf, -np.inf], np.nan).dropna().mean() * 100) if 'impliedVolatility' in calls.columns else 0
-                    avg_put_iv = float(puts['impliedVolatility'].replace([np.inf, -np.inf], np.nan).dropna().mean() * 100) if 'impliedVolatility' in puts.columns else 0
+                    avg_call_iv = float(calls['impliedVolatility'].replace([np.inf, -np.inf], np.nan).dropna().mean() * 100) if 'impliedVolatility' in calls.columns and not calls.empty else 0.0
+                    avg_put_iv = float(puts['impliedVolatility'].replace([np.inf, -np.inf], np.nan).dropna().mean() * 100) if 'impliedVolatility' in puts.columns and not puts.empty else 0.0
                 except Exception:
-                    avg_call_iv = 0
-                    avg_put_iv = 0
-                res = {
+                    avg_call_iv = 0.0
+                    avg_put_iv = 0.0
+
+                return {
                     'success': True,
                     'ticker': t,
                     'expiration': nearest_exp,
@@ -816,13 +855,15 @@ def fetch_spx_options_data():
                     'total_call_volume': total_call_volume,
                     'total_put_volume': total_put_volume
                 }
-                return res
+
             except Exception as e:
                 last_err = e
                 logger.warning(f"fetch_spx_options_data candidate {t} failed: {e}")
                 continue
+
         logger.error(f"fetch_spx_options_data all candidates failed, last error: {last_err}")
         return {'success': False, 'error': str(last_err), 'checked': candidates}
+
     except Exception as e:
         logger.error(f"fetch_spx_options_data unexpected error: {e}")
         return {'success': False, 'error': str(e)}
@@ -951,27 +992,104 @@ def _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines):
         return "Risk: Normal\nOpportunity: Monitor market\nAlgos: Monitor IV and volume"
 
 def generate_ai_briefing(spx_price, vix_price, put_call_ratio, news_headlines):
-    if not gemini_configured:
-        return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
+    """
+    Robust AI briefing generator, safe against model incompatibilities and syntax issues.
+    Uses format based prompt construction, tries multiple genai invocation patterns,
+    falls back to the deterministic briefing on any failure.
+    """
+    # Build prompt safely using format, no triple quote parsing issues
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        top_headlines = news_headlines[:3]
-        prompt = f\"\"\"Act as a hedge fund manager. Analyze in 3 bullets (max 150 words):
-
-Market: SPX ${spx_price:.0f}, VIX {vix_price:.1f}, P/C {put_call_ratio:.2f}
-News: {' | '.join(top_headlines)}
-
-Output:
-1. Risk: [one sentence]
-2. Opportunity: [one sentence]
-3. Algos: [one sentence]\"\"\"
-        response = model.generate_content(prompt)
-        if not response or not getattr(response, "text", None):
-            return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
-        return response.text
+        top_headlines = news_headlines[:3] if news_headlines else []
+        news_str = " | ".join(top_headlines) if top_headlines else "No headlines"
+        prompt_text = (
+            "Act as a hedge fund manager, analyze in three concise bullets, max 150 words.\n"
+            "Market: SPX ${spx:.0f}, VIX {vix:.1f}, P/C {pc:.2f}\n"
+            "News: {news}\n\n"
+            "Output:\n"
+            "1. Risk: [one sentence]\n"
+            "2. Opportunity: [one sentence]\n"
+            "3. Algos: [one sentence]"
+        ).format(spx=spx_price, vix=vix_price, pc=put_call_ratio, news=news_str)
     except Exception as e:
-        logger.error(f"generate_ai_briefing error: {e}")
-        return f"⚠️ AI Error, returning fallback briefing.\n\n{_simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)}"
+        logger.error(f"generate_ai_briefing prompt build error: {e}")
+        return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
+
+    # If Gemini not configured or library not available, use fallback
+    if not gemini_configured or not GEMINI_AVAILABLE:
+        logger.info("Gemini not configured or library missing, using fallback briefing")
+        return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
+
+    # Try several safe ways to call the generative client
+    try:
+        # Option A, new style GenerativeModel
+        if hasattr(genai, "GenerativeModel"):
+            try:
+                for candidate in ("gemini-1.5-flash", "gemini-1.5", "gemini-1", "text-bison-001"):
+                    try:
+                        model = genai.GenerativeModel(candidate)
+                        response = model.generate_content(prompt_text)
+                        text = getattr(response, "text", None)
+                        if text:
+                            return text
+                    except Exception as inner_e:
+                        logger.debug(f"GenerativeModel candidate {candidate} failed: {inner_e}")
+                        continue
+            except Exception as e:
+                logger.warning(f"GenerativeModel approach failed: {e}")
+
+        # Option B, older generate call
+        if hasattr(genai, "generate"):
+            try:
+                resp = genai.generate(prompt=prompt_text)
+                text = getattr(resp, "text", None) or str(resp)
+                if text:
+                    return text
+            except Exception as e:
+                logger.debug(f"genai.generate failed: {e}")
+
+        # Option C, try listing models then pick one
+        try:
+            models_list = None
+            if hasattr(genai, "list_models"):
+                try:
+                    models_list = genai.list_models()
+                except Exception as e:
+                    logger.debug(f"list_models call failed: {e}")
+            elif hasattr(genai, "models"):
+                try:
+                    models_list = genai.models()
+                except Exception as e:
+                    logger.debug(f"models call failed: {e}")
+
+            candidate_ids = []
+            if isinstance(models_list, dict):
+                candidate_ids = list(models_list.keys())
+            elif isinstance(models_list, (list, tuple)):
+                for m in models_list:
+                    if isinstance(m, dict) and "name" in m:
+                        candidate_ids.append(m["name"])
+                    elif isinstance(m, str):
+                        candidate_ids.append(m)
+
+            for mid in candidate_ids[:6]:
+                try:
+                    model = genai.GenerativeModel(mid)
+                    response = model.generate_content(prompt_text)
+                    text = getattr(response, "text", None)
+                    if text:
+                        return text
+                except Exception as e:
+                    logger.debug(f"candidate model {mid} generate failed: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"model list attempt failed: {e}")
+
+        logger.error("generate_ai_briefing, Gemini calls exhausted or unsupported model, falling back")
+        return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
+
+    except Exception as e:
+        logger.error(f"generate_ai_briefing unexpected error: {e}")
+        return _simple_briefing(spx_price, vix_price, put_call_ratio, news_headlines)
 
 # ============================================================
 # Service classes
@@ -1046,7 +1164,7 @@ with tab1:
                     value_str = f"${data['price']:.2f}"
                 st.metric(label=name, value=value_str, delta=f"{abs_str} ({data['change_pct']:+.2f}%)")
             else:
-                st.metric(label=name, value="LOADING", delta="—")
+                st.metric(label=name, value="LOADING", delta="-")
 
     st.divider()
 
@@ -1089,7 +1207,6 @@ with tab1:
             xaxis=dict(showgrid=False),
             yaxis=dict(showgrid=False, title="Volatility")
         )
-        # replaced use_container_width due to Streamlit deprecation
         st.plotly_chart(fig_vix, width='stretch')
 
     st.divider()
@@ -1214,7 +1331,6 @@ with tab1:
         with st.spinner("Loading watchlist..."):
             df = MarketDataService.watchlist(watchlist_tickers)
         if df is not None and not df.empty:
-            # replaced use_container_width with width='stretch'
             st.dataframe(
                 df,
                 width='stretch',
@@ -1390,4 +1506,4 @@ with tab4:
         st.caption(f"📊 Symbol: {tv_symbol} | Volume + SMAs")
 
 st.divider()
-st.caption("⚡ ALPHA DECK PRO v4.0 - GOLD MASTER ENHANCED, FIXED")
+st.caption("⚡ ALPHA DECK PRO v4.0 - GOLD MASTER ENHANCED, PATCHED")
