@@ -1,6 +1,6 @@
 """
-Alpha Deck PRO v7.0 - KROER EDITION (PRODUCTION-HARDENED)
-Kroer Barrier Frank-Wolfe Arbitrage | GEX Intelligence | EOD Review | Macro Tab
+Alpha Deck PRO v8.0 - DIRECTIONAL BIAS TERMINAL (PRODUCTION-HARDENED)
+Intraday SPX/ES Scalping | Kroer Barrier FW | GEX Intelligence | Regime Classification
 """
 
 import streamlit as st
@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import feedparser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import numpy as np
 import pytz
 from scipy.optimize import linprog, minimize
@@ -34,6 +34,8 @@ except (ImportError, Exception):
 # ============================================================================
 # CONFIGURATION DICTIONARIES (Decoupled from UI)
 # ============================================================================
+
+MARKET_SHIFTERS = {'NVDA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA'}
 
 STYLES_CONFIG = {
     "app_css": """
@@ -66,6 +68,7 @@ STYLES_CONFIG = {
         color: #FFB000;
         letter-spacing: 1px;
         box-shadow: 0 4px 20px rgba(255, 176, 0, 0.12);
+        transition: none;
     }
     .market-tracker .clock { color: #FFFFFF; margin-right: 10px; }
     .market-tracker .status-open { color: #00FF88; }
@@ -145,6 +148,18 @@ STYLES_CONFIG = {
         font-size: 13px;
         line-height: 1.8;
         box-shadow: 0 4px 30px rgba(255, 176, 0, 0.08);
+    }
+
+    .ai-briefing h4 {
+        color: #FFB000;
+        margin-bottom: 16px;
+        font-size: 14px;
+        letter-spacing: 2px;
+    }
+
+    .ai-briefing p {
+        margin: 12px 0;
+        text-align: justify;
     }
 
     /* Tabs */
@@ -241,16 +256,111 @@ STYLES_CONFIG = {
         border: 1px solid rgba(255, 176, 0, 0.4);
     }
 
-    .ai-briefing h4 {
+    /* Bias Pivot Card */
+    .bias-card {
+        background: rgba(26, 26, 26, 0.7);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1px solid rgba(255, 176, 0, 0.5);
+        border-radius: 14px;
+        padding: 20px;
+        margin: 8px 0;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    .bias-card .level-label {
         color: #FFB000;
-        margin-bottom: 16px;
-        font-size: 14px;
-        letter-spacing: 2px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        margin-bottom: 4px;
+    }
+    .bias-card .level-value {
+        color: #FFFFFF;
+        font-size: 22px;
+        font-weight: 700;
     }
 
-    .ai-briefing p {
-        margin: 12px 0;
-        text-align: justify;
+    /* Earnings Card */
+    .earnings-card {
+        background: rgba(26, 26, 26, 0.6);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 6px 0;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+        transition: all 0.25s;
+    }
+    .earnings-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 24px rgba(255, 176, 0, 0.12);
+    }
+    .earnings-card.market-shifter {
+        border: 1px solid #FFB000;
+        box-shadow: 0 2px 16px rgba(255, 176, 0, 0.15);
+    }
+    .earnings-card .ticker {
+        font-size: 16px;
+        font-weight: 700;
+        color: #FFFFFF;
+    }
+    .earnings-card .date-label {
+        font-size: 10px;
+        color: rgba(255, 176, 0, 0.7);
+        margin-top: 4px;
+    }
+    .earnings-card .eps-row {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.7);
+        margin-top: 6px;
+    }
+    .vol-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 9px;
+        font-weight: 700;
+        background: rgba(255, 176, 0, 0.18);
+        color: #FFB000;
+        border: 1px solid rgba(255, 176, 0, 0.4);
+        margin-left: 6px;
+    }
+
+    /* News Squawk Container */
+    .news-squawk {
+        background: rgba(26, 26, 26, 0.55);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 176, 0, 0.3);
+        border-radius: 12px;
+        padding: 16px;
+        max-height: 400px;
+        overflow-y: auto;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    .news-squawk .news-item {
+        padding: 10px 0;
+        border-bottom: 1px solid rgba(255, 176, 0, 0.1);
+    }
+    .news-squawk .news-source {
+        font-size: 9px;
+        color: #FFB000;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .news-squawk .news-title {
+        font-size: 12px;
+        color: #FFFFFF;
+        margin-top: 3px;
+    }
+    .news-squawk .news-title a {
+        color: #FFFFFF;
+        text-decoration: none;
+    }
+    .news-squawk .news-title a:hover {
+        color: #FFB000;
     }
     """,
 }
@@ -269,7 +379,7 @@ TEMPLATES = {
     "signal_badge": '<span class="signal-badge">{signal}</span>',
     "ai_briefing": """
     <div class="ai-briefing">
-        <h4>🧠 MACRO INTELLIGENCE BRIEFING</h4>
+        <h4>🧠 SESSION STRATEGY BRIEFING</h4>
         <p>{content}</p>
     </div>
     """,
@@ -309,7 +419,6 @@ SECTOR_SHORT_NAMES = {
     'Communication': 'COMM', 'Utilities': 'UTIL',
 }
 
-# Relevant tickers for earnings calendar
 EARNINGS_TICKERS = [
     'NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN', 'META', 'GOOGL',
     'COIN', 'MSTR', 'JPM', 'BAC', 'GS', 'XOM', 'CVX', 'UNH', 'LLY',
@@ -321,7 +430,7 @@ EARNINGS_TICKERS = [
 # ============================================================================
 
 st.set_page_config(
-    page_title="Alpha Deck PRO v7.0",
+    page_title="Alpha Deck PRO v8.0",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -347,11 +456,12 @@ st.markdown(f"<style>{STYLES_CONFIG['app_css']}</style>", unsafe_allow_html=True
 # ============================================================================
 # FRED CONNECTION PERSISTENCE FIX
 # Always initialize FRED client when API key exists, regardless of sidebar state
+# Wrapped in try-except for immediate availability
 # ============================================================================
 if FRED_AVAILABLE and st.session_state.fred_api_key and st.session_state.fred_client is None:
     try:
         st.session_state.fred_client = Fred(api_key=st.session_state.fred_api_key)
-    except Exception:
+    except (ValueError, TypeError, Exception):
         st.session_state.fred_client = None
 
 # ============================================================================
@@ -405,11 +515,14 @@ if st.session_state.sidebar_visible:
             st.sidebar.warning("⚠️ Gemini: API Key Required")
         st.session_state.gemini_configured = False
 
-    # Configure FRED (also persists via the fix above)
+    # Configure FRED — wrapped in try-except for immediate availability
     if FRED_AVAILABLE and st.session_state.fred_api_key:
         try:
             st.session_state.fred_client = Fred(api_key=st.session_state.fred_api_key)
             st.sidebar.success("✅ FRED: Connected")
+        except (ValueError, TypeError) as e:
+            st.sidebar.error(f"❌ FRED Init Error: {str(e)[:60]}")
+            st.session_state.fred_client = None
         except Exception as e:
             st.sidebar.error(f"❌ FRED Error: {str(e)[:60]}")
             st.session_state.fred_client = None
@@ -445,11 +558,14 @@ def get_tradingview_symbol(ticker: str) -> str:
 
 
 # ============================================================================
-# MARKET TRACKER HEADER — Real-time EST clock + status
+# MARKET TRACKER HEADER — Persistent EST Clock + Status
+# Uses st.empty() container for flicker-free updates
 # ============================================================================
+_header_container = st.empty()
+
 
 def render_market_tracker():
-    """Inject persistent top-right market tracker."""
+    """Inject persistent top-right market tracker (flicker-free)."""
     try:
         ny_tz = pytz.timezone('America/New_York')
         ny_now = datetime.now(ny_tz)
@@ -459,7 +575,7 @@ def render_market_tracker():
             status_html = '<span class="status-open">🟢 OPEN</span>'
         else:
             status_html = '<span class="status-closed">🔴 CLOSED</span>'
-        st.markdown(
+        _header_container.markdown(
             f'<div class="market-tracker">'
             f'<span class="clock">{clock_str}</span> | {status_html}'
             f'</div>',
@@ -477,10 +593,7 @@ render_market_tracker()
 
 @st.cache_data(ttl=60)
 def _batch_download(tickers_tuple: tuple, period: str = '5d') -> pd.DataFrame:
-    """
-    Central batch downloader. Accepts a tuple of tickers (hashable for caching).
-    Returns a MultiIndex DataFrame from yf.download.
-    """
+    """Central batch downloader. Hashable tuple for caching."""
     try:
         data = yf.download(
             list(tickers_tuple),
@@ -540,36 +653,38 @@ def fetch_ticker_data_reliable(ticker: str) -> dict:
 def calculate_rsi_wilders(prices: pd.Series, period: int = 14) -> float:
     """
     RSI with Wilder's Smoothing (EWM, alpha=1/period).
-    This is the industry-standard RSI calculation.
+    Returns NaN sentinel (50.0) which callers convert to CALIBRATING.
     """
     try:
+        if len(prices) < period + 1:
+            return float('nan')
+
         delta = prices.diff()
         gain = delta.where(delta > 0, 0.0)
         loss = (-delta.where(delta < 0, 0.0))
 
-        # Wilder's smoothing: EWM with alpha = 1/period
         avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
 
-        # Guard against zero-division
         rs = avg_gain / avg_loss.replace(0, 1e-10)
         rsi = 100.0 - (100.0 / (1.0 + rs))
 
         if rsi.empty or pd.isna(rsi.iloc[-1]):
-            return 50.0
+            return float('nan')
         return float(np.clip(rsi.iloc[-1], 0.0, 100.0))
     except Exception:
-        return 50.0
+        return float('nan')
 
 
 @st.cache_data(ttl=60)
 def fetch_watchlist_data(tickers: tuple) -> pd.DataFrame:
     """
     Fetch watchlist with technical signals using batch yf.download.
-    Uses 3mo lookback to provide sufficient RSI warm-up (60+ trading days).
+    Uses 3mo lookback for RSI warm-up (60+ trading days).
+    NaN RSI → "CALIBRATING…" signal.
     """
     tickers_list = list(tickers)
-    batch = _batch_download(tickers, period='3mo')  # FIX: 3mo for RSI warm-up
+    batch = _batch_download(tickers, period='3mo')
     if batch.empty:
         return pd.DataFrame()
 
@@ -596,10 +711,18 @@ def fetch_watchlist_data(tickers: tuple) -> pd.DataFrame:
             rsi_value = calculate_rsi_wilders(close)
 
             signals = []
-            if rsi_value < 30:
-                signals.append("🟢 OVERSOLD")
-            elif rsi_value > 70:
-                signals.append("🔴 OVERBOUGHT")
+
+            # RSI NaN → CALIBRATING instead of blank
+            if pd.isna(rsi_value):
+                signals.append("⏳ CALIBRATING…")
+                rsi_display = 0.0
+            else:
+                rsi_display = rsi_value
+                if rsi_value < 30:
+                    signals.append("🟢 OVERSOLD")
+                elif rsi_value > 70:
+                    signals.append("🔴 OVERBOUGHT")
+
             if volume > 20e6:
                 signals.append("⚡ HIGH VOL")
             if abs(change_pct) > 3:
@@ -611,7 +734,7 @@ def fetch_watchlist_data(tickers: tuple) -> pd.DataFrame:
                 'Change %': float(change_pct),
                 'Change $': float(change_abs),
                 'Volume': f"{volume / 1e6:.1f}M" if volume > 0 else "0M",
-                'RSI': float(rsi_value),
+                'RSI': float(rsi_display),
                 'Signals': " | ".join(signals) if signals else "—",
             })
         except Exception:
@@ -647,10 +770,8 @@ def fetch_sector_performance() -> pd.DataFrame:
         data = _extract_ticker_from_batch(batch, ticker, ticker_list)
         if data['success']:
             results.append({
-                'Sector': name,
-                'Ticker': ticker,
-                'Change %': data['change_pct'],
-                'Change $': data['change_abs'],
+                'Sector': name, 'Ticker': ticker,
+                'Change %': data['change_pct'], 'Change $': data['change_abs'],
             })
     df = pd.DataFrame(results)
     if not df.empty:
@@ -669,7 +790,7 @@ def fetch_sector_constituents(sector_ticker: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def fetch_spx_options_data() -> dict | None:
-    """Fetch SPX options with GEX (Gamma Exposure) calculation."""
+    """Fetch SPX options with GEX calculation."""
     try:
         spx = yf.Ticker("^GSPC")
         expirations = spx.options
@@ -699,9 +820,7 @@ def fetch_spx_options_data() -> dict | None:
         avg_call_iv = float(calls['impliedVolatility'].mean() * 100) if 'impliedVolatility' in calls.columns else 0
         avg_put_iv = float(puts['impliedVolatility'].mean() * 100) if 'impliedVolatility' in puts.columns else 0
 
-        # === GEX CALCULATION ===
-        # Gamma Exposure ≈ Gamma × Open Interest × 100 (contract multiplier)
-        # Positive for calls, negative for puts (dealers are short gamma on puts)
+        # GEX
         call_gex = 0.0
         put_gex = 0.0
         top_gex_strikes = []
@@ -709,11 +828,9 @@ def fetch_spx_options_data() -> dict | None:
         if 'gamma' in calls.columns:
             calls_gex_series = calls['gamma'].fillna(0) * calls['openInterest'].fillna(0) * 100
             call_gex = float(calls_gex_series.sum())
-
             put_gex_series = puts['gamma'].fillna(0) * puts['openInterest'].fillna(0) * 100 * -1
             put_gex = float(put_gex_series.sum())
 
-            # Top GEX strikes (absolute value)
             all_gex = pd.DataFrame({
                 'strike': pd.concat([calls['strike'], puts['strike']]),
                 'gex': pd.concat([calls_gex_series, put_gex_series.abs()]),
@@ -730,8 +847,7 @@ def fetch_spx_options_data() -> dict | None:
             'max_pain': max_pain,
             'avg_call_iv': avg_call_iv,
             'avg_put_iv': avg_put_iv,
-            'calls': calls,
-            'puts': puts,
+            'calls': calls, 'puts': puts,
             'total_call_volume': total_call_volume,
             'total_put_volume': total_put_volume,
             'net_gex': net_gex,
@@ -740,8 +856,6 @@ def fetch_spx_options_data() -> dict | None:
             'top_gex_strikes': top_gex_strikes,
             'success': True,
         }
-
-        # Persist for EOD Review Mode
         st.session_state.last_spx_options = result
         return result
     except Exception:
@@ -754,15 +868,11 @@ def fetch_vix_term_structure() -> dict:
     tickers = ('^VIX', '^VIX9D', '^VIX3M')
     batch = _batch_download(tickers, period='5d')
     ticker_list = list(tickers)
-
     vix = _extract_ticker_from_batch(batch, '^VIX', ticker_list)
     vix9d = _extract_ticker_from_batch(batch, '^VIX9D', ticker_list)
     vix3m = _extract_ticker_from_batch(batch, '^VIX3M', ticker_list)
-
     return {
-        'VIX': vix['price'],
-        'VIX9D': vix9d['price'],
-        'VIX3M': vix3m['price'],
+        'VIX': vix['price'], 'VIX9D': vix9d['price'], 'VIX3M': vix3m['price'],
         'backwardation': (
             vix9d['price'] > vix['price']
             if vix9d['success'] and vix['success']
@@ -786,21 +896,20 @@ def fetch_crypto_metrics(cryptos: tuple) -> dict:
 
 @st.cache_data(ttl=300)
 def fetch_news_feeds() -> list:
-    """Fetch RSS news."""
+    """Fetch RSS news for squawk."""
     feeds = {
-        'CNBC': 'https://www.cnbc.com/id/100003114/device/rss/rss.html',
-        'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
         'WSJ': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
+        'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
     }
     articles = []
     for source, url in feeds.items():
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:8]:
                 articles.append({
                     'Source': source,
-                    'Title': entry.title,
-                    'Link': entry.link,
+                    'Title': entry.get('title', 'Untitled'),
+                    'Link': entry.get('link', '#'),
                 })
         except Exception:
             pass
@@ -830,27 +939,20 @@ def fetch_insider_cluster_buys() -> pd.DataFrame | None:
 
 @st.cache_data(ttl=3600)
 def fetch_fred_liquidity() -> dict:
-    """Fetch Fed liquidity data using get_series() (correct fredapi method)."""
+    """Fetch Fed liquidity data using get_series()."""
     if st.session_state.fred_client is None:
         return {'yield_spread': 0, 'credit_spread': 0, 'fed_balance': 0, 'success': False}
-
     try:
         client = st.session_state.fred_client
-
         t10y2y = client.get_series('T10Y2Y')
         yield_spread = float(t10y2y.dropna().iloc[-1]) if not t10y2y.dropna().empty else 0
-
         hy_spread = client.get_series('BAMLH0A0HYM2')
         credit_spread = float(hy_spread.dropna().iloc[-1]) if not hy_spread.dropna().empty else 0
-
         fed_assets = client.get_series('WALCL')
         fed_balance = float(fed_assets.dropna().iloc[-1]) / 1000 if not fed_assets.dropna().empty else 0
-
         return {
-            'yield_spread': yield_spread,
-            'credit_spread': credit_spread,
-            'fed_balance': fed_balance,
-            'success': True,
+            'yield_spread': yield_spread, 'credit_spread': credit_spread,
+            'fed_balance': fed_balance, 'success': True,
         }
     except Exception as e:
         return {
@@ -861,17 +963,12 @@ def fetch_fred_liquidity() -> dict:
 
 @st.cache_data(ttl=60)
 def calculate_spx_crypto_correlation() -> dict:
-    """
-    SPX vs Crypto correlation with explicit inner join on date indexes
-    to handle the weekend gap (SPX closed, crypto 24/7).
-    """
+    """SPX vs Crypto correlation with inner join (weekend gap fix)."""
     try:
         tickers = ('^GSPC', 'BTC-USD', 'ETH-USD')
         batch = _batch_download(tickers, period='1mo')
         if batch.empty:
             return {'BTC': 0, 'ETH': 0}
-
-        ticker_list = list(tickers)
 
         def _get_close(tk):
             if tk not in batch.columns.get_level_values(0):
@@ -884,31 +981,85 @@ def calculate_spx_crypto_correlation() -> dict:
         spx = _get_close('^GSPC')
         btc = _get_close('BTC-USD')
         eth = _get_close('ETH-USD')
-
         if spx.empty or btc.empty or eth.empty:
             return {'BTC': 0, 'ETH': 0}
-
-        combined = pd.merge(
-            spx.to_frame(), btc.to_frame(),
-            left_index=True, right_index=True, how='inner'
-        )
-        combined = pd.merge(
-            combined, eth.to_frame(),
-            left_index=True, right_index=True, how='inner'
-        )
-
+        combined = pd.merge(spx.to_frame(), btc.to_frame(), left_index=True, right_index=True, how='inner')
+        combined = pd.merge(combined, eth.to_frame(), left_index=True, right_index=True, how='inner')
         if len(combined) < 10:
             return {'BTC': 0, 'ETH': 0}
-
         corr_btc = combined['^GSPC'].corr(combined['BTC-USD'])
         corr_eth = combined['^GSPC'].corr(combined['ETH-USD'])
-
         return {
             'BTC': float(corr_btc) if not pd.isna(corr_btc) else 0,
             'ETH': float(corr_eth) if not pd.isna(corr_eth) else 0,
         }
     except Exception as e:
         return {'BTC': 0, 'ETH': 0, 'error': str(e)}
+
+
+# ============================================================================
+# INTRADAY DIRECTIONAL BIAS LEVELS — PDH/PDL, Opening Range, VWAP
+# ============================================================================
+
+@st.cache_data(ttl=60)
+def fetch_intraday_bias_levels() -> dict:
+    """
+    Compute intraday directional bias levels for SPX/ES scalping:
+    - PDH / PDL: Previous Day High / Low from daily bars
+    - Opening Range (15m): High/Low of first 15 minutes
+    - VWAP: Σ(Typical Price × Volume) / Σ(Volume)
+    """
+    result = {
+        'pdh': 0.0, 'pdl': 0.0, 'or_high': 0.0, 'or_low': 0.0,
+        'vwap': 0.0, 'current': 0.0, 'success': False,
+    }
+    try:
+        # --- PDH / PDL from daily bars ---
+        daily = yf.download('^GSPC', period='5d', interval='1d', progress=False)
+        if daily is not None and len(daily) >= 2:
+            # Previous day = second-to-last row
+            prev_day = daily.iloc[-2]
+            result['pdh'] = float(prev_day['High'].iloc[0]) if hasattr(prev_day['High'], 'iloc') else float(prev_day['High'])
+            result['pdl'] = float(prev_day['Low'].iloc[0]) if hasattr(prev_day['Low'], 'iloc') else float(prev_day['Low'])
+            result['current'] = float(daily['Close'].iloc[-1].iloc[0]) if hasattr(daily['Close'].iloc[-1], 'iloc') else float(daily['Close'].iloc[-1])
+
+        # --- Opening Range (15m) + VWAP from intraday bars ---
+        intraday = yf.download('^GSPC', period='1d', interval='1m', progress=False)
+        if intraday is not None and not intraday.empty:
+            # Flatten multi-index columns if present
+            if isinstance(intraday.columns, pd.MultiIndex):
+                intraday.columns = intraday.columns.get_level_values(0)
+
+            # Opening Range: first 15 minutes of session
+            if intraday.index.tz is not None:
+                intraday.index = intraday.index.tz_convert('America/New_York')
+            else:
+                ny_tz = pytz.timezone('America/New_York')
+                intraday.index = intraday.index.tz_localize('UTC').tz_convert('America/New_York')
+
+            today_date = intraday.index[-1].date()
+            session_open = pd.Timestamp(f'{today_date} 09:30:00', tz='America/New_York')
+            or_end = pd.Timestamp(f'{today_date} 09:45:00', tz='America/New_York')
+
+            or_bars = intraday[(intraday.index >= session_open) & (intraday.index <= or_end)]
+            if not or_bars.empty:
+                result['or_high'] = float(or_bars['High'].max())
+                result['or_low'] = float(or_bars['Low'].min())
+
+            # VWAP: Σ(Typical Price × Volume) / Σ(Volume)
+            session_bars = intraday[intraday.index >= session_open]
+            if not session_bars.empty and 'Volume' in session_bars.columns:
+                typical_price = (session_bars['High'] + session_bars['Low'] + session_bars['Close']) / 3.0
+                vol = session_bars['Volume'].fillna(0)
+                cumulative_tpv = (typical_price * vol).sum()
+                cumulative_vol = vol.sum()
+                if cumulative_vol > 0:
+                    result['vwap'] = float(cumulative_tpv / cumulative_vol)
+
+        result['success'] = result['pdh'] > 0
+        return result
+    except Exception:
+        return result
 
 
 @st.cache_data(ttl=3600)
@@ -925,7 +1076,6 @@ def fetch_earnings_calendar() -> pd.DataFrame:
                         dt = pd.Timestamp(date_idx)
                         if dt.tz is not None:
                             dt = dt.tz_localize(None)
-                        # Only show upcoming or very recent (last 7 days)
                         cutoff = pd.Timestamp.now() - pd.Timedelta(days=7)
                         if dt >= cutoff:
                             eps_est = row.get('EPS Estimate', None)
@@ -933,10 +1083,11 @@ def fetch_earnings_calendar() -> pd.DataFrame:
                             surprise = row.get('Surprise(%)', None)
                             results.append({
                                 'Ticker': ticker_sym,
-                                'Date': dt.strftime('%Y-%m-%d'),
+                                'Date': dt,
                                 'EPS Est': f"${eps_est:.2f}" if eps_est is not None and not pd.isna(eps_est) else '—',
                                 'EPS Act': f"${eps_act:.2f}" if eps_act is not None and not pd.isna(eps_act) else '—',
                                 'Surprise': f"{surprise:.1f}%" if surprise is not None and not pd.isna(surprise) else '—',
+                                'is_shifter': ticker_sym in MARKET_SHIFTERS,
                             })
                     except Exception:
                         continue
@@ -946,22 +1097,22 @@ def fetch_earnings_calendar() -> pd.DataFrame:
     if results:
         df = pd.DataFrame(results)
         df = df.sort_values('Date').drop_duplicates(subset=['Ticker', 'Date'])
-        return df.head(30)
+        return df.head(40)
     return pd.DataFrame()
 
 
 # ============================================================================
-# POLYMARKET ARBITRAGE ENGINE — KROER FRAMEWORK
-# Barrier Frank-Wolfe | InitFW | α-Extraction | Profit Guarantee
+# POLYMARKET ARBITRAGE ENGINE — KROER FRAMEWORK (FINALIZED)
+# InitFW: u = mean(Z₀) | Barrier FW | α-Extraction (α=0.9) | Profit ≥ D−g
 # ============================================================================
 
 class PolymarketArbitrageEngine:
     """
     Production-grade arbitrage detection using the Kroer Framework:
-    - Algorithm 3 (InitFW): Active vertex set Z₀, interior point u
+    - Algorithm 3 (InitFW): u = mean(Z₀) to prevent gradient explosion
     - Barrier Frank-Wolfe: Adaptive ε-contraction, bounded Lipschitz
+    - α-Extraction (α=0.9): Signal only when 90% of edge captured
     - Profit Guarantee (Prop 4.1): Profit ≥ D(μ̂‖θ) − g(μ̂)
-    - α-Extraction: g(μ_t) ≤ (1−α)·D(μ_t‖θ) with α=0.9
     """
 
     def __init__(
@@ -972,69 +1123,33 @@ class PolymarketArbitrageEngine:
         max_fw_iter: int = 500,
     ):
         self.min_profit_threshold = min_profit_threshold
-        self.b = liquidity_param  # LMSR cost function parameter
-        self.alpha = alpha  # Extraction ratio (90% of available arbitrage)
+        self.b = liquidity_param
+        self.alpha = alpha
         self.max_fw_iter = max_fw_iter
 
     # ------------------------------------------------------------------
-    # Algorithm 3: InitFW — Find active vertices and interior point
+    # Algorithm 3: InitFW — u = mean(Z₀)
     # ------------------------------------------------------------------
     def init_fw(self, prices: np.ndarray) -> dict:
         """
-        Algorithm 3 (InitFW): Find an initial set of active vertices Z₀
-        and a valid interior point u where all unsettled coordinates are
-        strictly in (0, 1) to prevent gradient explosion at boundaries.
-
-        Returns:
-            dict with 'Z0' (active vertex set), 'u' (interior point),
-            'settled' (indices at 0 or 1), 'unsettled' (interior indices).
+        Algorithm 3 (InitFW): Compute active vertex set Z₀ and interior
+        point u as the AVERAGE of Z₀ vertices. This ensures u lies strictly
+        in the interior of the polytope, preventing gradient explosion in
+        the Barrier Frank-Wolfe variant.
         """
         n = len(prices)
-        prices_clipped = np.clip(prices, 0.0, 1.0)
-
-        # Identify settled coordinates (very close to 0 or 1)
-        BOUNDARY_EPS = 0.02
-        settled = []
-        unsettled = []
-        for i in range(n):
-            if prices_clipped[i] < BOUNDARY_EPS or prices_clipped[i] > (1.0 - BOUNDARY_EPS):
-                settled.append(i)
-            else:
-                unsettled.append(i)
-
-        # Compute interior point u:
-        # For unsettled coordinates, push away from boundary into (eps, 1-eps)
-        INTERIOR_EPS = 0.05
-        u = prices_clipped.copy()
-        for i in unsettled:
-            u[i] = np.clip(u[i], INTERIOR_EPS, 1.0 - INTERIOR_EPS)
-
-        # For settled coords, keep them but slightly interior to avoid log(0)
-        for i in settled:
-            if u[i] < BOUNDARY_EPS:
-                u[i] = INTERIOR_EPS / 2.0
-            else:
-                u[i] = 1.0 - INTERIOR_EPS / 2.0
-
-        # Normalize u to sum to 1 (probability simplex)
-        u_sum = np.sum(u)
-        if u_sum > 0:
-            u = u / u_sum
-        else:
-            u = np.ones(n) / n
-
-        # Ensure strict interiority after normalization
-        u = np.clip(u, 1e-8, 1.0 - 1e-8)
-        u = u / np.sum(u)
 
         # Active vertex set Z₀: standard basis vectors (simplex vertices)
         Z0 = np.eye(n)
 
+        # Interior point u = mean(Z₀) = (1/n, 1/n, ..., 1/n)
+        # This is the centroid of the simplex — guaranteed strictly interior
+        u = np.mean(Z0, axis=0)  # = np.ones(n) / n
+
         return {
             'Z0': Z0,
             'u': u,
-            'settled': settled,
-            'unsettled': unsettled,
+            'n': n,
         }
 
     # ------------------------------------------------------------------
@@ -1042,20 +1157,14 @@ class PolymarketArbitrageEngine:
     # ------------------------------------------------------------------
     def compute_bregman_divergence(self, mu: np.ndarray, theta: np.ndarray) -> float:
         """
-        Bregman divergence D(μ‖θ) = R(μ) + C(θ) − ⟨θ, μ⟩
-        where R(μ) = −Σ μ_i log(μ_i) (negative entropy)
-        and   C(θ) = b·log(Σ exp(θ_i/b)) (LMSR cost function)
+        D(μ‖θ) = R(μ) + C(θ) − ⟨θ, μ⟩
+        R(μ) = −Σ μ_i log(μ_i)  (negative entropy)
+        C(θ) = b·log(Σ exp(θ_i/b))  (LMSR cost)
         """
         mu_safe = np.clip(mu, 1e-10, 1.0 - 1e-10)
         theta_safe = np.clip(theta, -100, 100)
-
-        # R(μ): negative entropy
         R_mu = -np.sum(mu_safe * np.log(mu_safe))
-
-        # C(θ): LMSR log-partition
         C_theta = self.b * np.log(np.sum(np.exp(theta_safe / self.b)))
-
-        # D(μ‖θ) = R(μ) + C(θ) − ⟨θ, μ⟩
         divergence = R_mu + C_theta - np.dot(theta_safe, mu_safe)
         return float(max(divergence, 0.0))
 
@@ -1063,70 +1172,44 @@ class PolymarketArbitrageEngine:
     # Frank-Wolfe Gap: g(μ) = max_{v∈Z} ⟨∇R(μ), μ−v⟩
     # ------------------------------------------------------------------
     def compute_fw_gap(self, mu: np.ndarray, Z: np.ndarray) -> float:
-        """
-        Frank-Wolfe duality gap:
-        g(μ) = max_{v ∈ vertices(Z)} ⟨∇R(μ), μ − v⟩
-        where ∇R(μ) = −log(μ) − 1
-        """
         mu_safe = np.clip(mu, 1e-10, 1.0 - 1e-10)
-        grad = -(np.log(mu_safe) + 1.0)  # ∇R(μ) for negative entropy
-
+        grad = -(np.log(mu_safe) + 1.0)
         max_gap = -np.inf
         for v in Z:
             gap = np.dot(grad, mu_safe - v)
             max_gap = max(max_gap, gap)
-
         return float(max(max_gap, 0.0))
 
     # ------------------------------------------------------------------
     # α-Extraction Condition: g(μ_t) ≤ (1−α)·D(μ_t‖θ)
+    # Signal only fires when 90% of mathematical edge is captured
     # ------------------------------------------------------------------
     def check_alpha_extraction(self, gap: float, divergence: float) -> bool:
-        """
-        Returns True when the Frank-Wolfe gap is sufficiently small
-        relative to the Bregman divergence — we've captured α fraction
-        of the available arbitrage.
-
-        Condition: g(μ_t) ≤ (1 − α) × D(μ_t ‖ θ)
-        """
         if divergence <= 1e-10:
-            return True  # No divergence, nothing to extract
+            return True
         return gap <= (1.0 - self.alpha) * divergence
 
     # ------------------------------------------------------------------
-    # Guaranteed Profit (Proposition 4.1)
+    # Guaranteed Profit (Proposition 4.1): Profit ≥ D(μ̂‖θ) − g(μ̂)
     # ------------------------------------------------------------------
     def guaranteed_profit(self, divergence: float, gap: float) -> float:
-        """
-        Profit ≥ D(μ̂ ‖ θ) − g(μ̂)
-        The minimum guaranteed profit from exploiting the mispricing,
-        after accounting for the Frank-Wolfe approximation gap.
-        """
         return float(max(divergence - gap, 0.0))
 
     # ------------------------------------------------------------------
     # Barrier Frank-Wolfe (Core Algorithm)
     # ------------------------------------------------------------------
-    def barrier_frank_wolfe(
-        self, prices: np.ndarray, theta: np.ndarray
-    ) -> dict:
+    def barrier_frank_wolfe(self, prices: np.ndarray, theta: np.ndarray) -> dict:
         """
-        Barrier Frank-Wolfe with adaptive ε-contraction.
-
-        Contracts the polytope toward interior point u to maintain a
-        bounded Lipschitz constant, preventing gradient explosion at
-        price boundaries (0 or 1).
-
-        Returns:
-            dict with 'mu' (optimal point), 'gap', 'divergence',
-            'converged', 'iterations', 'alpha_satisfied'.
+        Barrier Frank-Wolfe with adaptive ε-contraction toward u = mean(Z₀).
+        The contraction maintains bounded Lipschitz constant by keeping
+        iterates strictly interior to the polytope.
         """
         n = len(prices)
 
-        # Step 1: InitFW
+        # Step 1: InitFW — u = mean(Z₀)
         init = self.init_fw(prices)
         Z = init['Z0']
-        u = init['u']
+        u = init['u']  # = (1/n, ..., 1/n) — simplex centroid
         mu = u.copy()
 
         best_mu = mu.copy()
@@ -1134,41 +1217,33 @@ class PolymarketArbitrageEngine:
         best_gap = self.compute_fw_gap(mu, Z)
 
         for t in range(self.max_fw_iter):
-            # Adaptive ε: contracts toward u as iterations increase
-            # ε_t = 1 / (t + 2) — standard FW rate
             epsilon_t = 2.0 / (t + 2.0)
 
-            # Contract polytope: P_t = (1 - ε_t)·P + ε_t·u
-            # This keeps iterates bounded away from boundary
+            # Contract toward interior point u
             mu_contracted = (1.0 - epsilon_t) * mu + epsilon_t * u
             mu_contracted = np.clip(mu_contracted, 1e-10, 1.0 - 1e-10)
             mu_contracted = mu_contracted / np.sum(mu_contracted)
 
-            # Gradient of negative entropy: ∇R(μ) = −log(μ) − 1
+            # Gradient: ∇R(μ) = −log(μ) − 1
             grad = -(np.log(mu_contracted) + 1.0)
 
-            # Linear minimization over vertices (FW step)
-            # Find v* = argmin_{v ∈ Z} ⟨∇R(μ), v⟩
+            # Linear minimization: v* = argmin_{v∈Z} ⟨∇R, v⟩
             dot_products = Z @ grad
             v_star_idx = np.argmin(dot_products)
             v_star = Z[v_star_idx]
 
-            # Frank-Wolfe gap
-            gap = np.dot(grad, mu_contracted - v_star)
-            gap = max(gap, 0.0)
+            gap = max(np.dot(grad, mu_contracted - v_star), 0.0)
 
-            # Step size: standard open-loop γ_t = 2/(t+2)
+            # Step size: γ_t = 2/(t+2)
             gamma = 2.0 / (t + 2.0)
 
-            # Update: μ_{t+1} = (1 − γ) · μ_t + γ · v*
+            # Update: μ_{t+1} = (1−γ)·μ_t + γ·v*
             mu_new = (1.0 - gamma) * mu_contracted + gamma * v_star
             mu_new = np.clip(mu_new, 1e-10, 1.0 - 1e-10)
             mu_new = mu_new / np.sum(mu_new)
 
-            # Compute divergence at new point
             div_new = self.compute_bregman_divergence(mu_new, theta)
 
-            # Track best solution
             if div_new > best_div:
                 best_div = div_new
                 best_mu = mu_new.copy()
@@ -1176,18 +1251,14 @@ class PolymarketArbitrageEngine:
 
             mu = mu_new
 
-            # Check α-extraction stopping condition
+            # α-extraction stopping: only signal if 90% captured
             if self.check_alpha_extraction(gap, div_new):
                 return {
-                    'mu': best_mu,
-                    'gap': float(best_gap),
-                    'divergence': float(best_div),
-                    'converged': True,
-                    'iterations': t + 1,
-                    'alpha_satisfied': True,
+                    'mu': best_mu, 'gap': float(best_gap),
+                    'divergence': float(best_div), 'converged': True,
+                    'iterations': t + 1, 'alpha_satisfied': True,
                 }
 
-            # Standard convergence check
             if gap < 1e-8:
                 break
 
@@ -1195,8 +1266,7 @@ class PolymarketArbitrageEngine:
         final_div = self.compute_bregman_divergence(best_mu, theta)
 
         return {
-            'mu': best_mu,
-            'gap': float(final_gap),
+            'mu': best_mu, 'gap': float(final_gap),
             'divergence': float(final_div),
             'converged': final_gap < 1e-6,
             'iterations': self.max_fw_iter,
@@ -1204,127 +1274,102 @@ class PolymarketArbitrageEngine:
         }
 
     # ------------------------------------------------------------------
-    # Dependency Arbitrage Detection (kept from v6)
+    # Dependency Arbitrage
     # ------------------------------------------------------------------
     def detect_dependency_arbitrage(self, markets: list, max_pairs: int = 100) -> list:
-        arbitrage_opportunities = []
+        arb_opps = []
         pairs_checked = 0
-        for i, market1 in enumerate(markets):
-            for j, market2 in enumerate(markets):
+        for i, m1 in enumerate(markets):
+            for j, m2 in enumerate(markets):
                 if i >= j or pairs_checked >= max_pairs:
                     continue
                 pairs_checked += 1
-                q1 = market1.get('question', '').lower()
-                q2 = market2.get('question', '').lower()
+                q1, q2 = m1.get('question', '').lower(), m2.get('question', '').lower()
                 if self._detect_implication(q1, q2):
-                    p1 = market1.get('yes_price', 0.5)
-                    p2 = market2.get('yes_price', 0.5)
+                    p1, p2 = m1.get('yes_price', 0.5), m2.get('yes_price', 0.5)
                     if p1 > p2 + 0.03:
-                        gross_profit = p1 - p2
-                        execution_costs = self._estimate_execution_costs(
-                            market1.get('liquidity', 1000),
-                            market1.get('volume', 100),
-                        )
-                        net_profit = gross_profit - execution_costs['total']
-                        if net_profit > self.min_profit_threshold:
-                            arbitrage_opportunities.append({
+                        gross = p1 - p2
+                        exec_costs = self._estimate_execution_costs(
+                            m1.get('liquidity', 1000), m1.get('volume', 100))
+                        net = gross - exec_costs['total']
+                        if net > self.min_profit_threshold:
+                            arb_opps.append({
                                 'type': 'dependency_violation',
-                                'market1': market1.get('question', ''),
-                                'market2': market2.get('question', ''),
-                                'slug1': market1.get('slug', ''),
-                                'slug2': market2.get('slug', ''),
+                                'market1': m1.get('question', ''),
+                                'market2': m2.get('question', ''),
+                                'slug1': m1.get('slug', ''),
+                                'slug2': m2.get('slug', ''),
                                 'p1': p1, 'p2': p2,
-                                'gross_profit': gross_profit,
-                                'execution_costs': execution_costs,
-                                'net_profit': net_profit,
+                                'gross_profit': gross,
+                                'execution_costs': exec_costs,
+                                'net_profit': net,
                                 'strategy': f'Short M1 @ {p1:.2f} / Long M2 @ {p2:.2f}',
                                 'confidence': self._compute_confidence(q1, q2),
                             })
-        return arbitrage_opportunities
+        return arb_opps
 
-    def _detect_implication(self, event1: str, event2: str) -> bool:
-        words1 = set(event1.split())
-        words2 = set(event2.split())
-        if len(words1) == 0:
+    def _detect_implication(self, e1: str, e2: str) -> bool:
+        w1, w2 = set(e1.split()), set(e2.split())
+        if len(w1) == 0:
             return False
-        intersection = words1.intersection(words2)
-        jaccard = len(intersection) / len(words1)
-        if jaccard > 0.7:
+        if len(w1.intersection(w2)) / len(w1) > 0.7:
             return True
-        if event1 in event2 or event2 in event1:
-            return True
-        return False
+        return e1 in e2 or e2 in e1
 
-    def _compute_confidence(self, event1: str, event2: str) -> float:
-        words1 = set(event1.split())
-        words2 = set(event2.split())
-        if len(words1) == 0 or len(words2) == 0:
-            return 0.0
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        return float(len(intersection) / len(union)) if len(union) > 0 else 0.0
+    def _compute_confidence(self, e1: str, e2: str) -> float:
+        w1, w2 = set(e1.split()), set(e2.split())
+        union = w1.union(w2)
+        return float(len(w1.intersection(w2)) / len(union)) if union else 0.0
 
     def _estimate_execution_costs(self, liquidity: float, volume: float) -> dict:
-        max_trade = min(volume * 0.10, liquidity * 0.05)
-        max_trade = max(max_trade, 100)
-        base_slippage = 0.005
-        slippage = base_slippage * np.sqrt(max_trade / max(liquidity, 100))
-        slippage = min(slippage, 0.05)
-        gas_fixed = 2.0
-        gas_pct = gas_fixed / max(max_trade, 100)
-        total_cost = slippage + gas_pct
+        max_trade = max(min(volume * 0.10, liquidity * 0.05), 100)
+        slippage = min(0.005 * np.sqrt(max_trade / max(liquidity, 100)), 0.05)
+        gas_pct = 2.0 / max(max_trade, 100)
         return {
             'slippage': float(slippage), 'gas': float(gas_pct),
-            'total': float(total_cost), 'max_trade_size': float(max_trade),
+            'total': float(slippage + gas_pct), 'max_trade_size': float(max_trade),
         }
 
     # ------------------------------------------------------------------
-    # analyze_market: Full Kroer Pipeline
+    # analyze_market: Full Kroer Pipeline → TRADE / HOLD
     # ------------------------------------------------------------------
     def analyze_market(self, market_data: dict) -> dict | None:
         """
-        Full analysis pipeline:
-        1. InitFW → get interior point
-        2. Construct θ from market prices (LMSR inverse)
-        3. Barrier Frank-Wolfe → find optimal μ
-        4. Check α-extraction condition
-        5. Compute guaranteed profit (Prop 4.1)
-        6. Emit TRADE or HOLD signal
+        Full Kroer pipeline:
+        1. InitFW → u = mean(Z₀) (simplex centroid)
+        2. θ from LMSR inverse of market prices
+        3. Barrier FW → find optimal μ
+        4. α-extraction check (α=0.9)
+        5. Guaranteed profit (Prop 4.1)
+        6. TRADE only if α-extraction satisfied AND profitable
         """
         try:
             outcome_prices = market_data.get('outcomePrices', ['0.5', '0.5'])
             prices = np.array([float(p) for p in outcome_prices])
             n = len(prices)
-
             if n < 2:
                 return None
 
-            # Construct θ (log-odds) from market prices
             prices_norm = prices / (np.sum(prices) + 1e-10)
             prices_safe = np.clip(prices_norm, 1e-8, 1.0 - 1e-8)
             theta = self.b * np.log(prices_safe)
 
-            # Run Barrier Frank-Wolfe
             fw_result = self.barrier_frank_wolfe(prices_norm, theta)
 
             divergence = fw_result['divergence']
             gap = fw_result['gap']
             optimal_mu = fw_result['mu']
 
-            # Guaranteed profit (Prop 4.1): Profit ≥ D(μ̂‖θ) − g(μ̂)
             gross_profit = self.guaranteed_profit(divergence, gap)
-
-            # Execution costs
             execution = self._estimate_execution_costs(
                 market_data.get('liquidity', 1000),
                 market_data.get('volume', 100),
             )
             net_profit = gross_profit - execution['total']
 
-            # Signal: TRADE only when α-extraction condition met AND profitable
+            # TRADE only when α-extraction (90%) is satisfied
             alpha_satisfied = fw_result['alpha_satisfied']
             is_profitable = net_profit > self.min_profit_threshold and alpha_satisfied
-
             signal = 'TRADE' if is_profitable else 'HOLD'
 
             return {
@@ -1411,23 +1456,18 @@ def fetch_polymarket_with_arbitrage():
                     opportunities.append({
                         'Event': market.get('question', ''), 'slug': slug,
                         'Yes %': yes_price * 100, 'Volume': volume,
-                        'Liquidity': liquidity,
-                        'Arb Score': arb_score,
+                        'Liquidity': liquidity, 'Arb Score': arb_score,
                     })
             except Exception:
                 continue
 
-        # Dependency arbitrage
         markets_clean = []
         for m in markets:
             try:
                 if any(kw in m.get('question', '').lower() for kw in filter_keywords):
                     continue
                 outcome_prices = m.get('outcomePrices', ['0.5'])
-                if not outcome_prices or len(outcome_prices) == 0:
-                    yes_price = 0.5
-                else:
-                    yes_price = float(outcome_prices[0] or 0.5)
+                yes_price = float(outcome_prices[0] or 0.5) if outcome_prices else 0.5
                 markets_clean.append({
                     'question': m.get('question', ''), 'slug': m.get('slug', ''),
                     'yes_price': yes_price,
@@ -1451,9 +1491,7 @@ def fetch_polymarket_with_arbitrage():
                 'Net %': arb['net_profit'] * 100,
                 'Sharpe': arb['net_profit'] / max(arb['execution_costs']['total'], 0.01),
                 'Max Trade': f"${arb['execution_costs']['max_trade_size']:.0f}",
-                'α-Met': '✅',
-                'Iters': 0,
-                'Type': 'DEP',
+                'α-Met': '✅', 'Iters': 0, 'Type': 'DEP',
             })
 
         opportunities_sorted = sorted(opportunities, key=lambda x: x['Arb Score'], reverse=True)
@@ -1465,44 +1503,56 @@ def fetch_polymarket_with_arbitrage():
 
 
 # ============================================================================
-# AI MACRO BRIEFING — System/User Prompt Structure
+# AI ENGINE — Gemini 1.5 Flash | Lead Session Strategist | Regime Classifier
 # ============================================================================
 
-_GEMINI_SYSTEM_INSTRUCTION = """You are a senior macro strategist at a quantitative hedge fund.
-Your role is to generate dense, specific macro-economic intelligence briefings.
+_GEMINI_SYSTEM_INSTRUCTION = """You are the Lead Session Strategist at a proprietary day-trading desk
+specializing in intraday SPX/ES scalping.
+
+Your primary function is to classify the current session into exactly ONE of three daily regimes:
+1. **EXPANSIONARY (Trend)** — Directional move sustained by volume.
+2. **CONSOLIDATION (Range)** — Price compressing between defined levels.
+3. **REVERSAL** — Momentum fading at extremes; mean-reversion setup.
 
 Rules:
-- Write in dense prose (no bullet points), maximum 250 words.
-- Use specific numbers from the provided data table.
-- Avoid generic statements like "markets are volatile" — quantify everything.
-- Structure your analysis across four areas: Yield Curve & Fed Positioning,
-  Correlation Regime, Liquidity Cycles, and SPX Technical Levels.
-- For SPX levels, provide probability-weighted scenarios, e.g.:
-  "70% consolidation 5850-5900, 20% breakdown to 5750, 10% breakout to 6000."
+- Start your briefing with the regime label in bold, e.g.: **REGIME: EXPANSIONARY**
+- Write in dense, actionable prose (no bullet points). Maximum 250 words.
+- Use specific numbers from the provided data table — do NOT fabricate levels.
+- Reference the key bias levels: PDH, PDL, Opening Range, VWAP, Max Pain.
+- For SPX, provide probability-weighted intraday scenarios, e.g.:
+  "65% continuation above VWAP to PDH, 25% range between OR levels, 10% reversal below PDL."
+- Identify which levels are key inflection zones for the session.
+- Note if GEX positioning (positive = dampening vol, negative = amplifying moves) changes your bias.
 """
 
 
-def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correlations):
-    """Generate macro briefing with System/User prompt and structured Markdown table."""
+def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correlations, bias_levels=None):
+    """Generate session strategy briefing with Gemini 1.5 Flash."""
     if not st.session_state.gemini_configured:
         return (
             "⚠️ **Gemini API Configuration Required** — Enable API access in "
-            "sidebar to unlock macro intelligence."
+            "sidebar to unlock session strategy intelligence."
         )
     try:
         model = genai.GenerativeModel(
-            'gemini-2.0-flash-exp',
+            'models/gemini-1.5-flash',
             system_instruction=_GEMINI_SYSTEM_INSTRUCTION,
         )
         spx_price = indices.get('SPX', {}).get('price', 0)
         vix_price = indices.get('VIX', {}).get('price', 0)
         pc_ratio = spx_options.get('put_call_ratio', 0) if spx_options else 0
         max_pain = spx_options.get('max_pain', 0) if spx_options else 0
+        net_gex = spx_options.get('net_gex', 0) if spx_options else 0
         yield_spread = liquidity.get('yield_spread', 0)
         credit_spread = liquidity.get('credit_spread', 0)
         fed_balance = liquidity.get('fed_balance', 0)
-        corr_btc = correlations.get('BTC', 0)
-        corr_eth = correlations.get('ETH', 0)
+
+        # Bias levels
+        pdh = bias_levels.get('pdh', 0) if bias_levels else 0
+        pdl = bias_levels.get('pdl', 0) if bias_levels else 0
+        or_high = bias_levels.get('or_high', 0) if bias_levels else 0
+        or_low = bias_levels.get('or_low', 0) if bias_levels else 0
+        vwap = bias_levels.get('vwap', 0) if bias_levels else 0
 
         if yield_spread < 0:
             yc_context = f"inverted by {abs(yield_spread):.2f}% (recession signal active)"
@@ -1511,7 +1561,9 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
         else:
             yc_context = f"normalized at {yield_spread:.2f}% (expansion intact)"
 
-        user_message = f"""Generate a macro briefing (200-250 words, paragraph format) based on this live data:
+        gex_context = "positive (vol dampening)" if net_gex > 0 else "negative (vol amplifying)"
+
+        user_message = f"""Classify today's regime and generate a session strategy briefing (200-250 words) based on this live data:
 
 | Metric | Value |
 |--------|-------|
@@ -1519,13 +1571,17 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
 | VIX Level | {vix_price:.1f} |
 | Put/Call Ratio | {pc_ratio:.2f} |
 | Max Pain Strike | ${max_pain:.0f} |
+| Net GEX | {net_gex:,.0f} ({gex_context}) |
+| Previous Day High (PDH) | ${pdh:.0f} |
+| Previous Day Low (PDL) | ${pdl:.0f} |
+| Opening Range High (15m) | ${or_high:.0f} |
+| Opening Range Low (15m) | ${or_low:.0f} |
+| Session VWAP | ${vwap:.2f} |
 | 10Y-2Y Spread | {yield_spread:.2f}% ({yc_context}) |
 | HY Credit Spread | {credit_spread:.2f}% |
 | Fed Balance Sheet | ${fed_balance:.2f}T |
-| SPX/BTC Correlation | {corr_btc:.2f} |
-| SPX/ETH Correlation | {corr_eth:.2f} |
 
-Cover all four areas: Yield Curve, Correlation Regime, Liquidity Cycles, SPX Technical Levels."""
+Classify as EXPANSIONARY, CONSOLIDATION, or REVERSAL. Provide probability-weighted scenarios referencing PDH, PDL, OR, and VWAP."""
 
         response = model.generate_content(user_message)
         return response.text
@@ -1540,7 +1596,7 @@ Cover all four areas: Yield Curve, Correlation Regime, Liquidity Cycles, SPX Tec
 
 
 # ============================================================================
-# UI COMPONENTS — CARD-BASED LAYOUTS (Templates from config)
+# UI COMPONENTS — CARD-BASED LAYOUTS
 # ============================================================================
 
 def render_metric_card(label, value, change_pct, change_abs, signals=None):
@@ -1575,7 +1631,6 @@ def render_watchlist_cards(df):
     if df.empty:
         st.warning("📊 Watchlist data unavailable")
         return
-
     cols_per_row = 3
     for i in range(0, len(df), cols_per_row):
         cols = st.columns(cols_per_row)
@@ -1595,7 +1650,7 @@ def render_watchlist_cards(df):
 
 
 def render_interactive_sector_heatmap(sector_df):
-    """Interactive sector heatmap with drill-down capability."""
+    """Interactive sector heatmap with drill-down."""
     if sector_df.empty:
         st.warning("📊 Sector data unavailable")
         return
@@ -1624,7 +1679,6 @@ def render_interactive_sector_heatmap(sector_df):
     st.plotly_chart(fig, use_container_width=True, key="sector_heatmap")
 
     st.caption("🔍 **SECTOR DRILL-DOWN** — Click to view constituents")
-
     sectors_list = sector_df.to_dict('records')
 
     if len(sectors_list) > 0:
@@ -1655,19 +1709,16 @@ def render_interactive_sector_heatmap(sector_df):
 
 @st.fragment
 def _render_sector_drilldown(sector_df):
-    """Sector drill-down fragment — only this re-renders on interaction."""
+    """Sector drill-down fragment."""
     sector_ticker = st.session_state.selected_sector
     matching = sector_df[sector_df['Ticker'] == sector_ticker]['Sector'].values
     sector_name = matching[0] if len(matching) > 0 else sector_ticker
-
     st.markdown("---")
     st.subheader(f"🔬 {sector_name} — CONSTITUENT BREAKDOWN")
-
     if st.button("❌ CLOSE DRILL-DOWN", key="close_drill"):
         st.session_state.show_sector_drill = False
         st.session_state.selected_sector = None
         st.rerun()
-
     constituents = fetch_sector_constituents(sector_ticker)
     if not constituents.empty:
         render_watchlist_cards(constituents)
@@ -1681,16 +1732,12 @@ def _render_sector_drilldown(sector_df):
 
 @st.fragment
 def render_spx_options_section():
-    """SPX Options intelligence with GEX and EOD Review Mode."""
+    """SPX Options with GEX and EOD Review Mode."""
     st.subheader("🎯 SPX OPTIONS + GEX INTELLIGENCE")
-
     spx_data = fetch_spx_options_data()
-    mkt_open = is_market_open()
 
-    # Determine data source: live or cached EOD
     display_data = None
     is_eod_review = False
-
     if spx_data and spx_data.get('success'):
         display_data = spx_data
     elif st.session_state.get('last_spx_options'):
@@ -1701,7 +1748,6 @@ def render_spx_options_section():
         if is_eod_review:
             st.info("📋 **DAILY EOD REVIEW** — Showing last recorded options data")
 
-        # Core metrics row
         cols_opt = st.columns(6)
         with cols_opt[0]:
             st.metric("P/C Ratio", f"{display_data['put_call_ratio']:.2f}")
@@ -1714,24 +1760,20 @@ def render_spx_options_section():
         with cols_opt[4]:
             st.metric("Put IV", f"{display_data['avg_put_iv']:.1f}%")
         with cols_opt[5]:
-            net_gex = display_data.get('net_gex', 0)
-            gex_label = "Net GEX"
-            st.metric(gex_label, f"{net_gex:,.0f}")
+            st.metric("Net GEX", f"{display_data.get('net_gex', 0):,.0f}")
 
         st.caption(f"📅 Expiration: {display_data['expiration']}")
 
-        # GEX Details
-        call_gex = display_data.get('call_gex', 0)
-        put_gex = display_data.get('put_gex', 0)
-        top_strikes = display_data.get('top_gex_strikes', [])
-
         col_gex1, col_gex2 = st.columns(2)
         with col_gex1:
+            call_gex = display_data.get('call_gex', 0)
+            put_gex = display_data.get('put_gex', 0)
+            net_gex = display_data.get('net_gex', 0)
             st.caption("**GAMMA EXPOSURE BREAKDOWN**")
             st.markdown(
                 f"- Call GEX: **{call_gex:,.0f}**\n"
                 f"- Put GEX: **{put_gex:,.0f}**\n"
-                f"- Net GEX: **{call_gex + put_gex:,.0f}**"
+                f"- Net GEX: **{net_gex:,.0f}**"
             )
             if net_gex > 0:
                 st.success("🛡️ **Positive GEX** — Dealers hedging dampens volatility")
@@ -1739,6 +1781,7 @@ def render_spx_options_section():
                 st.warning("⚠️ **Negative GEX** — Dealers amplify moves")
 
         with col_gex2:
+            top_strikes = display_data.get('top_gex_strikes', [])
             if top_strikes:
                 st.caption("**TOP GEX STRIKES (Hedging Zones)**")
                 for ts in top_strikes:
@@ -1748,27 +1791,76 @@ def render_spx_options_section():
 
 
 # ============================================================================
+# NEWS SQUAWK RENDERER
+# ============================================================================
+
+def render_news_squawk():
+    """Render scrollable news squawk container with WSJ + Reuters."""
+    articles = fetch_news_feeds()
+    if not articles:
+        st.info("📡 No news available")
+        return
+
+    items_html = ""
+    for article in articles:
+        source = article.get('Source', '')
+        title = article.get('Title', 'Untitled')
+        link = article.get('Link', '#')
+        items_html += f"""
+        <div class="news-item">
+            <div class="news-source">{source}</div>
+            <div class="news-title"><a href="{link}" target="_blank">{title}</a></div>
+        </div>
+        """
+
+    st.markdown(
+        f'<div class="news-squawk">{items_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
+# EARNINGS CARD RENDERER
+# ============================================================================
+
+def render_earnings_card(ticker, date_str, eps_est, eps_act, surprise, is_shifter):
+    """Render a single earnings card with optional Market Shifter styling."""
+    card_class = "earnings-card market-shifter" if is_shifter else "earnings-card"
+    badge_html = '<span class="vol-badge">⚡ VOLATILITY RISK</span>' if is_shifter else ''
+
+    html = f"""
+    <div class="{card_class}">
+        <div class="ticker">{ticker} {badge_html}</div>
+        <div class="date-label">{date_str}</div>
+        <div class="eps-row">Est: {eps_est} | Act: {eps_act} | Surprise: {surprise}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ============================================================================
 # MAIN APPLICATION
 # ============================================================================
 
-st.title("⚡ ALPHA DECK PRO v7.0")
-st.caption("**KROER EDITION** — Barrier Frank-Wolfe Arbitrage | GEX Intelligence | Macro Terminal")
+st.title("⚡ ALPHA DECK PRO v8.0")
+st.caption("**DIRECTIONAL BIAS TERMINAL** — Intraday SPX/ES Scalping | Kroer Barrier FW | GEX + Regime Intelligence")
 st.divider()
 
 # ============================================================================
-# AI MACRO BRIEFING
+# AI SESSION STRATEGY BRIEFING
 # ============================================================================
 
-st.subheader("🧠 AI MACRO INTELLIGENCE")
+st.subheader("🧠 SESSION STRATEGY — REGIME CLASSIFIER")
 
-if st.button("🚀 GENERATE MACRO BRIEF", key="ai_macro", use_container_width=True):
-    with st.spinner('🔬 Analyzing macro regime...'):
+if st.button("🚀 GENERATE SESSION BRIEF", key="ai_macro", use_container_width=True):
+    with st.spinner('🔬 Classifying session regime...'):
         indices = fetch_index_data()
         spx_opts = fetch_spx_options_data()
         liq = fetch_fred_liquidity()
         corrs = calculate_spx_crypto_correlation()
+        bias = fetch_intraday_bias_levels()
 
-        briefing = generate_enhanced_ai_macro_briefing(indices, spx_opts, liq, corrs)
+        briefing = generate_enhanced_ai_macro_briefing(indices, spx_opts, liq, corrs, bias)
 
         st.markdown(
             TEMPLATES["ai_briefing"].format(content=briefing),
@@ -1796,9 +1888,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 with tab1:
     st.subheader("📡 MARKET PULSE")
-
     indices = fetch_index_data()
-
     cols = st.columns(6)
     for idx, (name, data) in enumerate(indices.items()):
         with cols[idx]:
@@ -1821,13 +1911,11 @@ with tab1:
     st.subheader("📊 VOLATILITY TERM STRUCTURE")
     vix_term = fetch_vix_term_structure()
     col_vix1, col_vix2 = st.columns([1, 2])
-
     with col_vix1:
         if vix_term['backwardation']:
             st.error("⚠️ **BACKWARDATION** — Crash signal active")
         else:
             st.success("✅ **CONTANGO** — Normal vol structure")
-
     with col_vix2:
         fig_vix = go.Figure()
         fig_vix.add_trace(go.Scatter(
@@ -1849,15 +1937,14 @@ with tab1:
 
     st.divider()
 
-    # SPX Options + GEX (uses @st.fragment)
+    # SPX Options + GEX
     render_spx_options_section()
 
     st.divider()
 
     # Watchlist
     st.subheader("⚡ WATCHLIST + TECHNICAL SCANNER")
-    st.caption("**Card-based layout** — Wilder's RSI (60-day warm-up)")
-
+    st.caption("**Wilder's RSI (60-day warm-up)** — NaN displays CALIBRATING")
     watchlist_tickers = ('NVDA', 'TSLA', 'AAPL', 'AMD', 'MSFT', 'AMZN',
                          'META', 'GOOGL', 'COIN', 'MSTR', 'SPY', 'QQQ')
     watchlist_df = fetch_watchlist_data(watchlist_tickers)
@@ -1880,16 +1967,15 @@ with tab2:
     def render_arbitrage_tab():
         st.subheader("🎲 POLYMARKET ARBITRAGE ENGINE")
         st.caption(
-            "**Kroer Framework** — Barrier Frank-Wolfe | InitFW | "
+            "**Kroer Framework** — InitFW: u=mean(Z₀) | Barrier FW | "
             "α-Extraction (α=0.9) | Guaranteed Profit (Prop 4.1)"
         )
 
         opp_df, arb_df = fetch_polymarket_with_arbitrage()
 
-        st.markdown("### 💰 ARBITRAGE TRADES — TRADE / HOLD Signals")
+        st.markdown("### 💰 ARBITRAGE TRADES — TRADE / HOLD")
 
         if not arb_df.empty:
-            # Render TRADE/HOLD signal badges
             for _, row in arb_df.iterrows():
                 signal = row.get('Signal', 'HOLD')
                 css_class = 'trade' if signal == 'TRADE' else 'hold'
@@ -1904,7 +1990,6 @@ with tab2:
 
             st.divider()
 
-            # Detailed dataframe
             display_cols = [c for c in [
                 'Event', 'Signal', 'Yes %', 'Optimal %', 'D(μ‖θ)', 'FW Gap',
                 'Profit ≥', 'Net %', 'Sharpe', 'Max Trade', 'α-Met', 'Iters',
@@ -1924,32 +2009,25 @@ with tab2:
                 },
             )
             st.caption(
-                f"🎯 **{len(arb_df)} opportunities** analyzed via Kroer Barrier FW | "
-                f"α-extraction threshold: {0.9:.0%}"
+                f"🎯 **{len(arb_df)} opportunities** — α-extraction ≥ 90% required for TRADE signal"
             )
         else:
-            st.info("✅ No arbitrage detected — Markets pricing efficiently within convex hull")
+            st.info("✅ No arbitrage detected — Markets pricing efficiently")
 
         st.divider()
-
         st.markdown("### 📊 TOP PREDICTION MARKETS")
-
         if not opp_df.empty:
             opp_display = opp_df.copy()
             opp_display['Volume'] = opp_display['Volume'].apply(
-                lambda x: f"${x / 1e6:.2f}M" if x >= 1e6 else f"${x / 1e3:.0f}K"
-            )
+                lambda x: f"${x / 1e6:.2f}M" if x >= 1e6 else f"${x / 1e3:.0f}K")
             opp_display['Liquidity'] = opp_display['Liquidity'].apply(
-                lambda x: f"${x / 1e6:.2f}M" if x >= 1e6 else f"${x / 1e3:.0f}K"
-            )
+                lambda x: f"${x / 1e6:.2f}M" if x >= 1e6 else f"${x / 1e3:.0f}K")
             opp_display['Yes %'] = opp_display['Yes %'].apply(lambda x: f"{x:.1f}%")
             opp_display['Arb Score'] = opp_display['Arb Score'].apply(lambda x: f"{x:.4f}")
-
             st.dataframe(
                 opp_display[['Event', 'Yes %', 'Volume', 'Liquidity', 'Arb Score']],
                 use_container_width=True, height=400, hide_index=True,
             )
-
             st.caption("**🔗 Clickable Links:**")
             for _, row in opp_df.iterrows():
                 if row.get('slug'):
@@ -1961,12 +2039,11 @@ with tab2:
     render_arbitrage_tab()
 
 # ============================================================================
-# TAB 3: CRYPTO (Pure crypto — Macro moved to Tab 4)
+# TAB 3: CRYPTO (Pure crypto + correlation — correlation stays here)
 # ============================================================================
 
 with tab3:
     st.subheader("₿ CRYPTO MARKET PULSE")
-
     crypto_data = fetch_crypto_metrics(('BTC', 'ETH', 'SOL', 'DOGE'))
     cols_crypto = st.columns(4)
     for idx, (crypto, data) in enumerate(crypto_data.items()):
@@ -1981,7 +2058,7 @@ with tab3:
 
     st.divider()
 
-    # Correlation Regime Indicator
+    # SPX/Crypto Correlation — stays in Crypto tab
     st.subheader("🔗 SPX/CRYPTO CORRELATIONS")
     corrs = calculate_spx_crypto_correlation()
     cols_corr = st.columns(2)
@@ -1998,16 +2075,63 @@ with tab3:
         st.info("⚖️ **Transition Regime** — Moderate correlation, regime unclear")
 
 # ============================================================================
-# TAB 4: MACRO (Dedicated — FRED, Yield Curve, Correlation)
+# TAB 4: MACRO — Intraday Directional Bias (No correlation — moved to Crypto)
 # ============================================================================
 
 with tab4:
     @st.fragment
     def render_macro_tab():
-        st.subheader("🏛️ MACRO LIQUIDITY DASHBOARD")
+        st.subheader("🏛️ INTRADAY DIRECTIONAL BIAS")
 
-        # FRED Liquidity
-        st.markdown("### 📊 FED LIQUIDITY METRICS")
+        # --- Daily Pivot / Bias Levels Card ---
+        st.markdown("### 📐 DAILY PIVOT LEVELS")
+        bias = fetch_intraday_bias_levels()
+
+        if bias['success']:
+            # Bias level cards in a row
+            cols_bias = st.columns(5)
+            bias_items = [
+                ("PDH", f"${bias['pdh']:.0f}"),
+                ("PDL", f"${bias['pdl']:.0f}"),
+                ("OR HIGH", f"${bias['or_high']:.0f}"),
+                ("OR LOW", f"${bias['or_low']:.0f}"),
+                ("VWAP", f"${bias['vwap']:.2f}"),
+            ]
+            for i, (label, val) in enumerate(bias_items):
+                with cols_bias[i]:
+                    st.markdown(
+                        f'<div class="bias-card">'
+                        f'<div class="level-label">{label}</div>'
+                        f'<div class="level-value">{val}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # SPX position relative to levels
+            current = bias['current']
+            st.divider()
+            st.caption("**SPX POSITION RELATIVE TO KEY LEVELS**")
+
+            if current > bias['pdh']:
+                st.success(f"🚀 **ABOVE PDH** — SPX ${current:.0f} > PDH ${bias['pdh']:.0f} (Breakout territory)")
+            elif current < bias['pdl']:
+                st.error(f"📉 **BELOW PDL** — SPX ${current:.0f} < PDL ${bias['pdl']:.0f} (Breakdown territory)")
+            elif bias['or_high'] > 0 and current > bias['or_high']:
+                st.success(f"📈 **ABOVE OR HIGH** — SPX ${current:.0f} > OR ${bias['or_high']:.0f} (Bullish momentum)")
+            elif bias['or_low'] > 0 and current < bias['or_low']:
+                st.warning(f"📉 **BELOW OR LOW** — SPX ${current:.0f} < OR ${bias['or_low']:.0f} (Bearish pressure)")
+            elif bias['vwap'] > 0:
+                if current > bias['vwap']:
+                    st.info(f"⬆️ **ABOVE VWAP** — SPX ${current:.0f} > VWAP ${bias['vwap']:.2f} (Institutional buying)")
+                else:
+                    st.info(f"⬇️ **BELOW VWAP** — SPX ${current:.0f} < VWAP ${bias['vwap']:.2f} (Institutional selling)")
+        else:
+            st.warning("📊 Bias levels unavailable — Market data pending")
+
+        st.divider()
+
+        # --- FRED Liquidity ---
+        st.markdown("### 🏛️ FED LIQUIDITY METRICS")
         liq = fetch_fred_liquidity()
 
         if liq['success']:
@@ -2026,7 +2150,6 @@ with tab4:
             else:
                 st.success("✅ **NORMALIZED CURVE** — Expansion intact")
 
-            # Yield curve visualization
             st.divider()
             st.markdown("### 📈 YIELD CURVE SNAPSHOT")
             fig_yc = go.Figure()
@@ -2054,60 +2177,92 @@ with tab4:
 
         st.divider()
 
-        # SPX/Crypto Correlation Detail
-        st.markdown("### 🔗 SPX / CRYPTO CORRELATION MATRIX")
-        corrs = calculate_spx_crypto_correlation()
-
-        cols_mc = st.columns(3)
-        with cols_mc[0]:
-            st.metric("SPX / BTC (30d)", f"{corrs['BTC']:.3f}")
-        with cols_mc[1]:
-            st.metric("SPX / ETH (30d)", f"{corrs['ETH']:.3f}")
-        with cols_mc[2]:
-            avg_corr = (corrs['BTC'] + corrs['ETH']) / 2
-            st.metric("Avg Correlation", f"{avg_corr:.3f}")
-
-        if avg_corr > 0.5:
-            st.success("📈 **Unified Risk Regime** — Equities and crypto moving together")
-        elif avg_corr < 0.2:
-            st.warning("📉 **Decoupling** — Crypto diverging from traditional markets")
-        else:
-            st.info("⚖️ **Neutral** — Mixed correlation signals")
+        # --- News Squawk ---
+        st.markdown("### 📡 NEWS SQUAWK — WSJ + REUTERS")
+        render_news_squawk()
 
     render_macro_tab()
 
 # ============================================================================
-# TAB 5: EARNINGS CALENDAR (st.fragment)
+# TAB 5: EARNINGS — Strategic 3-Column Grid (st.fragment)
 # ============================================================================
 
 with tab5:
     @st.fragment
     def render_earnings_tab():
-        st.subheader("📅 EARNINGS CALENDAR — RELEVANT STOCKS")
-        st.caption("Filtered to watchlist + major sector constituents")
+        st.subheader("📅 EARNINGS — STRATEGIC GRID")
+        st.caption("Market Shifters highlighted with gold border + ⚡ VOLATILITY RISK badge")
 
         earnings_df = fetch_earnings_calendar()
 
         if not earnings_df.empty:
-            st.dataframe(
-                earnings_df, use_container_width=True, height=500,
-                hide_index=True,
-                column_config={
-                    'Ticker': st.column_config.TextColumn(width='small'),
-                    'Date': st.column_config.TextColumn(width='medium'),
-                    'EPS Est': st.column_config.TextColumn(width='small'),
-                    'EPS Act': st.column_config.TextColumn(width='small'),
-                    'Surprise': st.column_config.TextColumn(width='small'),
-                },
+            today = pd.Timestamp.now().normalize()
+            tomorrow = today + pd.Timedelta(days=1)
+            week_end = today + pd.Timedelta(days=7)
+
+            # Categorize
+            today_list = earnings_df[earnings_df['Date'].dt.normalize() == today]
+            tomorrow_list = earnings_df[earnings_df['Date'].dt.normalize() == tomorrow]
+            week_list = earnings_df[
+                (earnings_df['Date'].dt.normalize() > tomorrow) &
+                (earnings_df['Date'].dt.normalize() <= week_end)
+            ]
+
+            col_today, col_tomorrow, col_week = st.columns(3)
+
+            with col_today:
+                st.markdown("#### 📌 TODAY")
+                if not today_list.empty:
+                    for _, row in today_list.iterrows():
+                        render_earnings_card(
+                            ticker=row['Ticker'],
+                            date_str=row['Date'].strftime('%b %d'),
+                            eps_est=row['EPS Est'],
+                            eps_act=row['EPS Act'],
+                            surprise=row['Surprise'],
+                            is_shifter=row['is_shifter'],
+                        )
+                else:
+                    st.caption("No earnings today")
+
+            with col_tomorrow:
+                st.markdown("#### 📌 TOMORROW")
+                if not tomorrow_list.empty:
+                    for _, row in tomorrow_list.iterrows():
+                        render_earnings_card(
+                            ticker=row['Ticker'],
+                            date_str=row['Date'].strftime('%b %d'),
+                            eps_est=row['EPS Est'],
+                            eps_act=row['EPS Act'],
+                            surprise=row['Surprise'],
+                            is_shifter=row['is_shifter'],
+                        )
+                else:
+                    st.caption("No earnings tomorrow")
+
+            with col_week:
+                st.markdown("#### 📌 THIS WEEK")
+                if not week_list.empty:
+                    for _, row in week_list.iterrows():
+                        render_earnings_card(
+                            ticker=row['Ticker'],
+                            date_str=row['Date'].strftime('%b %d'),
+                            eps_est=row['EPS Est'],
+                            eps_act=row['EPS Act'],
+                            surprise=row['Surprise'],
+                            is_shifter=row['is_shifter'],
+                        )
+                else:
+                    st.caption("No earnings this week")
+
+            st.divider()
+            st.caption(
+                f"📊 **{len(earnings_df)} earnings events** from {len(EARNINGS_TICKERS)} tracked tickers | "
+                f"Market Shifters: {', '.join(sorted(MARKET_SHIFTERS))}"
             )
-            st.caption(f"📊 **{len(earnings_df)} earnings events** from {len(EARNINGS_TICKERS)} tracked tickers")
         else:
             st.info("📅 No earnings data available for tracked tickers in this window")
-
-        st.divider()
-        st.caption(
-            "**Tracked Tickers:** " + ", ".join(EARNINGS_TICKERS)
-        )
+            st.caption("**Tracked:** " + ", ".join(EARNINGS_TICKERS))
 
     render_earnings_tab()
 
@@ -2117,19 +2272,16 @@ with tab5:
 
 with tab6:
     st.subheader("📈 TRADINGVIEW ADVANCED CHARTS")
-
     all_tickers = [
         'SPY', 'QQQ', 'IWM', 'NVDA', 'TSLA', 'AAPL', 'AMD',
         'MSFT', 'AMZN', 'META', 'GOOGL', 'COIN', 'MSTR',
         'BTC-USD', 'ETH-USD',
     ]
-
     default_idx = (
         all_tickers.index(st.session_state.selected_ticker)
         if st.session_state.selected_ticker in all_tickers
         else 0
     )
-
     selected_ticker = st.selectbox(
         "SELECT TICKER", all_tickers, index=default_idx, key="chart_select"
     )
@@ -2137,7 +2289,6 @@ with tab6:
 
     if selected_ticker:
         tv_symbol = get_tradingview_symbol(selected_ticker)
-
         tradingview_widget = f"""
         <div class="tradingview-widget-container" style="height:100%;width:100%">
           <div id="tradingview_chart" style="height:700px;width:100%"></div>
@@ -2172,7 +2323,6 @@ with tab6:
           </script>
         </div>
         """
-
         st.components.v1.html(tradingview_widget, height=750)
         st.caption(f"📊 Symbol: {tv_symbol} | Volume + SMA 15 + SMA 30")
 
@@ -2181,9 +2331,9 @@ with tab6:
 # ============================================================================
 
 st.divider()
-st.caption("⚡ **ALPHA DECK PRO v7.0 — KROER EDITION (PRODUCTION-HARDENED)**")
+st.caption("⚡ **ALPHA DECK PRO v8.0 — DIRECTIONAL BIAS TERMINAL (PRODUCTION-HARDENED)**")
 st.caption(
-    "✅ Kroer Barrier FW | ✅ α-Extraction (90%) | ✅ Profit Guarantee (Prop 4.1) | "
-    "✅ GEX Intelligence | ✅ EOD Review | ✅ Market Tracker | "
-    "✅ Wilder's RSI (60d) | ✅ FRED Persistence | ✅ Macro Tab | ✅ Earnings Tab"
+    "✅ Gemini 1.5 Flash Regime Classifier | ✅ InitFW u=mean(Z₀) | ✅ α=0.9 Extraction | "
+    "✅ GEX Intelligence | ✅ PDH/PDL/OR/VWAP Bias | ✅ News Squawk | "
+    "✅ Earnings Grid (Market Shifters) | ✅ RSI CALIBRATING Fix | ✅ Header Persistence"
 )
