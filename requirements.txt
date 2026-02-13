@@ -10,3 +10,5 @@ google-generativeai
 scipy
 numpy
 lxml
+pydantic>=2.0
+streamlit-lightweight-charts-v5
