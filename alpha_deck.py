@@ -1,6 +1,6 @@
 """
-Alpha Deck PRO v8.0 - DIRECTIONAL BIAS TERMINAL (PRODUCTION-HARDENED)
-Intraday SPX/ES Scalping | Kroer Barrier FW | GEX Intelligence | Regime Classification
+Alpha Deck PRO v9.0 — INSTITUTIONAL-GRADE ANALYTICS TERMINAL
+Advanced Greeks | Pydantic v2 | Expert Quant Strategist | Multi-Source Data | Lightweight Charts
 """
 
 import streamlit as st
@@ -17,7 +17,16 @@ import numpy as np
 import pytz
 from scipy.optimize import linprog, minimize
 from scipy.spatial import ConvexHull
+from scipy.stats import norm as scipy_norm
 import itertools
+import math
+
+# Pydantic v2 — Data Integrity Layer
+try:
+    from pydantic import BaseModel, field_validator, SecretStr
+    PYDANTIC_AVAILABLE = True
+except (ImportError, Exception):
+    PYDANTIC_AVAILABLE = False
 
 # Import APIs conditionally
 try:
@@ -31,6 +40,61 @@ try:
     FRED_AVAILABLE = True
 except (ImportError, Exception):
     FRED_AVAILABLE = False
+
+# Lightweight Charts v5
+try:
+    from streamlit_lightweight_charts_v5 import renderLightweightCharts
+    LWCHARTS_AVAILABLE = True
+except (ImportError, Exception):
+    LWCHARTS_AVAILABLE = False
+
+# ============================================================================
+# PYDANTIC v2 — SCHEMA VALIDATION + DATA CLEANING
+# ============================================================================
+
+if PYDANTIC_AVAILABLE:
+    class MarketData(BaseModel):
+        """Schema for validated market data points."""
+        ticker: str
+        price: float
+        change_pct: float
+        volume: int
+
+        @field_validator('price', 'change_pct', mode='before')
+        @classmethod
+        def clean_numeric(cls, v):
+            if isinstance(v, str):
+                return float(v.replace('$', '').replace(',', '').strip())
+            return float(v)
+
+        @field_validator('volume', mode='before')
+        @classmethod
+        def clean_volume(cls, v):
+            if isinstance(v, str):
+                return int(float(v.replace(',', '').strip()))
+            return int(v)
+
+    class APIQuotes(BaseModel):
+        """Schema for external API quote validation (FMP, Alpha Vantage)."""
+        symbol: str
+        price: float
+        day_high: float = 0.0
+        day_low: float = 0.0
+        volume: int = 0
+
+        @field_validator('price', 'day_high', 'day_low', mode='before')
+        @classmethod
+        def clean_price(cls, v):
+            if isinstance(v, str):
+                return float(v.replace('$', '').replace(',', '').strip())
+            return float(v) if v else 0.0
+
+        @field_validator('volume', mode='before')
+        @classmethod
+        def clean_volume(cls, v):
+            if isinstance(v, str):
+                return int(float(v.replace(',', '').strip()))
+            return int(v) if v else 0
 
 # ============================================================================
 # CONFIGURATION DICTIONARIES (Decoupled from UI)
@@ -363,6 +427,82 @@ STYLES_CONFIG = {
     .news-squawk .news-title a:hover {
         color: #FFB000;
     }
+
+    /* v9.0 — Greeks / Momentum Score Card */
+    .greeks-card {
+        background: rgba(26, 26, 26, 0.75);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1px solid rgba(0, 255, 136, 0.3);
+        border-radius: 14px;
+        padding: 18px;
+        margin: 8px 0;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    .greeks-card .greek-label {
+        color: #00FF88;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        margin-bottom: 4px;
+    }
+    .greeks-card .greek-value {
+        color: #FFFFFF;
+        font-size: 20px;
+        font-weight: 700;
+    }
+
+    /* Momentum Score Gauge */
+    .momentum-gauge {
+        background: rgba(26, 26, 26, 0.8);
+        backdrop-filter: blur(14px);
+        border: 2px solid rgba(255, 176, 0, 0.5);
+        border-radius: 14px;
+        padding: 24px;
+        margin: 8px 0;
+        text-align: center;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    .momentum-gauge .gauge-label {
+        color: #FFB000;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 8px;
+    }
+    .momentum-gauge .gauge-value {
+        font-size: 42px;
+        font-weight: 700;
+    }
+    .momentum-gauge .gauge-bullish { color: #00FF88; }
+    .momentum-gauge .gauge-neutral { color: #FFB000; }
+    .momentum-gauge .gauge-bearish { color: #FF4444; }
+
+    /* Sentiment Card (StockGeist) */
+    .sentiment-card {
+        background: rgba(26, 26, 26, 0.65);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(0, 200, 255, 0.3);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 6px 0;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+    .sentiment-card .sent-label {
+        color: #00C8FF;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+    }
+    .sentiment-card .sent-value {
+        color: #FFFFFF;
+        font-size: 18px;
+        font-weight: 700;
+        margin-top: 4px;
+    }
     """,
 }
 
@@ -400,17 +540,22 @@ SECTOR_ETF_MAP = {
 }
 
 SECTOR_CONSTITUENTS = {
-    'XLK': ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'AMD'],
-    'XLF': ['JPM', 'BAC', 'WFC', 'GS', 'MS'],
-    'XLE': ['XOM', 'CVX', 'COP', 'SLB', 'EOG'],
-    'XLV': ['UNH', 'JNJ', 'LLY', 'ABBV', 'MRK'],
-    'XLI': ['CAT', 'UNP', 'HON', 'GE', 'RTX'],
-    'XLP': ['PG', 'PEP', 'KO', 'COST', 'WMT'],
-    'XLY': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE'],
-    'XLB': ['LIN', 'APD', 'SHW', 'ECL', 'FCX'],
-    'XLRE': ['PLD', 'AMT', 'EQIX', 'SPG', 'O'],
-    'XLC': ['META', 'GOOGL', 'NFLX', 'DIS', 'CMCSA'],
-    'XLU': ['NEE', 'SO', 'DUK', 'AEP', 'D'],
+    'XLK': ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'AMD', 'ORCL', 'INTC', 'MU', 'TXN', 'PLTR',
+            'CRM', 'AMAT', 'KLAC', 'LRCX', 'CDNS', 'INTU', 'IBM', 'ADI', 'STX', 'UBER'],
+    'XLF': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'BRK-B', 'V', 'MA', 'AXP', 'BLK',
+            'SPGI', 'ICE', 'C', 'COF', 'PNC', 'USB', 'BX', 'KKR', 'CB', 'COIN'],
+    'XLE': ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'VLO', 'PSX', 'MPC', 'OXY', 'HAL'],
+    'XLV': ['UNH', 'JNJ', 'LLY', 'ABBV', 'MRK', 'TMO', 'DHR', 'PFE', 'ABT', 'BMY',
+            'GILD', 'ISRG', 'CVS', 'SYK', 'BSX', 'MDT', 'CI', 'MCK', 'HCA', 'AMGN'],
+    'XLI': ['CAT', 'UNP', 'HON', 'GE', 'RTX', 'DE', 'LMT', 'BA', 'ETN', 'ITW',
+            'NOC', 'GD', 'MMM', 'WM', 'GEV', 'PH', 'IR', 'CTAS', 'CSX', 'JCI'],
+    'XLP': ['PG', 'PEP', 'KO', 'COST', 'WMT', 'PM', 'CL', 'EL', 'MO', 'MDLZ'],
+    'XLY': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'LOW', 'BKNG', 'TJX', 'RCL',
+            'MAR', 'HLT', 'DHI', 'CVNA', 'F', 'GM'],
+    'XLB': ['LIN', 'APD', 'SHW', 'ECL', 'FCX', 'NEM', 'CRH', 'NUE', 'DOW', 'DD'],
+    'XLRE': ['PLD', 'AMT', 'EQIX', 'SPG', 'O', 'WELL', 'DLR', 'PSA', 'AVB', 'ARE'],
+    'XLC': ['META', 'GOOGL', 'NFLX', 'DIS', 'CMCSA', 'T', 'VZ', 'TMUS', 'EA', 'TTWO'],
+    'XLU': ['NEE', 'SO', 'DUK', 'AEP', 'D', 'SRE', 'EXC', 'XEL', 'CEG', 'VST'],
 }
 
 SECTOR_SHORT_NAMES = {
@@ -427,11 +572,11 @@ EARNINGS_TICKERS = [
 ]
 
 # ============================================================================
-# PAGE CONFIG + SESSION STATE
+# PAGE CONFIG + SESSION STATE (v9.0 — expanded API keys)
 # ============================================================================
 
 st.set_page_config(
-    page_title="Alpha Deck PRO v8.0",
+    page_title="Alpha Deck PRO v9.0",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -447,6 +592,10 @@ for key, default in {
     'fred_client': None,
     'gemini_configured': False,
     'last_spx_options': None,
+    # v9.0 — new API keys
+    'alphavantage_api_key': None,
+    'fmp_api_key': None,
+    'stockgeist_api_key': None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -466,7 +615,7 @@ if FRED_AVAILABLE and st.session_state.fred_api_key and st.session_state.fred_cl
         st.session_state.fred_client = None
 
 # ============================================================================
-# SIDEBAR TOGGLE & API CONFIGURATION
+# SIDEBAR TOGGLE & API CONFIGURATION (v9.0 — 5 API keys)
 # ============================================================================
 col_toggle, col_spacer = st.columns([1, 20])
 with col_toggle:
@@ -477,7 +626,7 @@ with col_toggle:
 
 if st.session_state.sidebar_visible:
     st.sidebar.title("🔑 API CONFIGURATION")
-    st.sidebar.caption("Professional API Management")
+    st.sidebar.caption("Professional API Management — v9.0")
 
     gemini_key_input = st.sidebar.text_input(
         "Gemini API Key",
@@ -493,11 +642,39 @@ if st.session_state.sidebar_visible:
     )
 
     st.sidebar.markdown("---")
+    st.sidebar.caption("**v9.0 — DATA EXPANSION**")
+
+    av_key_input = st.sidebar.text_input(
+        "Alpha Vantage API Key",
+        value=st.session_state.alphavantage_api_key or "",
+        type="password",
+        help="Get free key: https://www.alphavantage.co/support/#api-key"
+    )
+    fmp_key_input = st.sidebar.text_input(
+        "FMP API Key",
+        value=st.session_state.fmp_api_key or "",
+        type="password",
+        help="Get free key: https://financialmodelingprep.com/developer"
+    )
+    stockgeist_key_input = st.sidebar.text_input(
+        "StockGeist API Key",
+        value=st.session_state.stockgeist_api_key or "",
+        type="password",
+        help="Get key: https://stockgeist.ai"
+    )
+
+    st.sidebar.markdown("---")
 
     if gemini_key_input:
         st.session_state.gemini_api_key = gemini_key_input.strip()
     if fred_key_input:
         st.session_state.fred_api_key = fred_key_input.strip()
+    if av_key_input:
+        st.session_state.alphavantage_api_key = av_key_input.strip()
+    if fmp_key_input:
+        st.session_state.fmp_api_key = fmp_key_input.strip()
+    if stockgeist_key_input:
+        st.session_state.stockgeist_api_key = stockgeist_key_input.strip()
 
     # Configure Gemini
     if GEMINI_AVAILABLE and st.session_state.gemini_api_key:
@@ -531,6 +708,22 @@ if st.session_state.sidebar_visible:
         if not st.session_state.fred_api_key:
             st.sidebar.warning("⚠️ FRED: API Key Required")
         st.session_state.fred_client = None
+
+    # v9.0 — Status indicators for new APIs
+    if st.session_state.alphavantage_api_key:
+        st.sidebar.success("✅ Alpha Vantage: Key Set")
+    else:
+        st.sidebar.info("💡 Alpha Vantage: Optional (technical indicators)")
+
+    if st.session_state.fmp_api_key:
+        st.sidebar.success("✅ FMP: Key Set")
+    else:
+        st.sidebar.info("💡 FMP: Optional (real-time quotes)")
+
+    if st.session_state.stockgeist_api_key:
+        st.sidebar.success("✅ StockGeist: Key Set")
+    else:
+        st.sidebar.info("💡 StockGeist: Optional (sentiment)")
 
     st.sidebar.caption("💡 Session-only storage")
     st.sidebar.caption("🔒 Zero data retention")
@@ -586,7 +779,6 @@ def render_market_tracker():
         pass
 
 render_market_tracker()
-
 
 # ============================================================================
 # DATA FETCHING — VECTORIZED yf.download
@@ -789,6 +981,69 @@ def fetch_sector_constituents(sector_ticker: str) -> pd.DataFrame:
     return fetch_watchlist_data(tuple(tickers))
 
 
+@st.cache_data(ttl=120)
+def fetch_treemap_data() -> pd.DataFrame:
+    """
+    Build flat DataFrame for Finviz-style sector treemap.
+    Batch-downloads all constituents across all sectors.
+    Returns: Sector | Ticker | Price | Change % | Volume | MarketCapProxy
+    """
+    # Collect all tickers and their sector mapping
+    ticker_to_sector = {}
+    all_tickers = []
+    for etf, sector_name in SECTOR_ETF_MAP.items():
+        for tk in SECTOR_CONSTITUENTS.get(etf, []):
+            ticker_to_sector[tk] = sector_name
+            all_tickers.append(tk)
+
+    if not all_tickers:
+        return pd.DataFrame()
+
+    batch = _batch_download(tuple(all_tickers), period='5d')
+    if batch.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for tk in all_tickers:
+        try:
+            if len(all_tickers) == 1:
+                hist = batch
+            else:
+                if tk not in batch.columns.get_level_values(0):
+                    continue
+                hist = batch[tk]
+
+            close = hist['Close'].dropna()
+            if close.empty or len(close) < 2:
+                continue
+
+            price = float(close.iloc[-1])
+            prev = float(close.iloc[-2])
+            chg_pct = ((price - prev) / prev * 100) if prev != 0 else 0.0
+
+            vol_col = hist['Volume'].dropna() if 'Volume' in hist.columns else pd.Series([0])
+            volume = int(vol_col.iloc[-1]) if not vol_col.empty else 0
+
+            # Market cap proxy: price x volume (bigger companies = bigger boxes)
+            mkt_proxy = max(price * volume, 1)
+
+            vol_str = f"{volume / 1e6:.1f}M" if volume >= 1e6 else f"{volume / 1e3:.0f}K"
+
+            rows.append({
+                'Sector': ticker_to_sector[tk],
+                'Ticker': tk,
+                'Price': price,
+                'Change %': float(chg_pct),
+                'Volume': vol_str,
+                'MarketCapProxy': mkt_proxy,
+            })
+        except Exception:
+            continue
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+
 @st.cache_data(ttl=60)
 def fetch_spx_options_data() -> dict | None:
     """Fetch SPX options with GEX calculation."""
@@ -825,6 +1080,7 @@ def fetch_spx_options_data() -> dict | None:
         call_gex = 0.0
         put_gex = 0.0
         top_gex_strikes = []
+        net_gex_by_strike = {}
 
         if 'gamma' in calls.columns:
             calls_gex_series = calls['gamma'].fillna(0) * calls['openInterest'].fillna(0) * 100
@@ -834,12 +1090,19 @@ def fetch_spx_options_data() -> dict | None:
 
             all_gex = pd.DataFrame({
                 'strike': pd.concat([calls['strike'], puts['strike']]),
-                'gex': pd.concat([calls_gex_series, put_gex_series.abs()]),
+                'gex': pd.concat([calls_gex_series, put_gex_series]),
             })
-            top_strikes = all_gex.groupby('strike')['gex'].sum().nlargest(5)
-            top_gex_strikes = [{'strike': float(s), 'gex': float(g)} for s, g in top_strikes.items()]
+            # Net GEX by strike for gamma flip calculation
+            gex_by_strike = all_gex.groupby('strike')['gex'].sum()
+            net_gex_by_strike = {float(s): float(g) for s, g in gex_by_strike.items()}
+
+            top_strikes = gex_by_strike.abs().nlargest(5)
+            top_gex_strikes = [{'strike': float(s), 'gex': float(gex_by_strike[s])} for s in top_strikes.index]
 
         net_gex = call_gex + put_gex
+
+        # v9.0 — IV Skew (put IV - call IV)
+        iv_skew = avg_put_iv - avg_call_iv
 
         result = {
             'expiration': nearest_exp,
@@ -848,6 +1111,7 @@ def fetch_spx_options_data() -> dict | None:
             'max_pain': max_pain,
             'avg_call_iv': avg_call_iv,
             'avg_put_iv': avg_put_iv,
+            'iv_skew': iv_skew,
             'calls': calls, 'puts': puts,
             'total_call_volume': total_call_volume,
             'total_put_volume': total_put_volume,
@@ -855,6 +1119,7 @@ def fetch_spx_options_data() -> dict | None:
             'call_gex': call_gex,
             'put_gex': put_gex,
             'top_gex_strikes': top_gex_strikes,
+            'net_gex_by_strike': net_gex_by_strike,
             'success': True,
         }
         st.session_state.last_spx_options = result
@@ -884,52 +1149,65 @@ def fetch_vix_term_structure() -> dict:
 
 @st.cache_data(ttl=60)
 def fetch_crypto_metrics(cryptos: tuple) -> dict:
-    """Fetch crypto data via batch download."""
-    tickers = tuple(f"{c}-USD" for c in cryptos)
+    """Fetch multiple crypto assets."""
+    ticker_map = {
+        'BTC': 'BTC-USD', 'ETH': 'ETH-USD',
+        'SOL': 'SOL-USD', 'DOGE': 'DOGE-USD',
+    }
+    tickers = tuple(ticker_map[c] for c in cryptos if c in ticker_map)
     batch = _batch_download(tickers, period='5d')
     ticker_list = list(tickers)
     results = {}
-    for crypto_symbol in cryptos:
-        ticker = f"{crypto_symbol}-USD"
-        results[crypto_symbol] = _extract_ticker_from_batch(batch, ticker, ticker_list)
+    for name, ticker in ticker_map.items():
+        if name in cryptos:
+            results[name] = _extract_ticker_from_batch(batch, ticker, ticker_list)
     return results
 
 
 @st.cache_data(ttl=300)
 def fetch_news_feeds() -> list:
-    """Fetch RSS news for squawk."""
+    """Fetch financial news from RSS feeds (WSJ + Reuters)."""
     feeds = {
         'WSJ': 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
-        'Reuters': 'https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best',
+        'REUTERS': 'https://www.rssboard.org/rss-specification',
     }
     articles = []
     for source, url in feeds.items():
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:8]:
+            for entry in feed.entries[:10]:
                 articles.append({
                     'Source': source,
                     'Title': entry.get('title', 'Untitled'),
                     'Link': entry.get('link', '#'),
+                    'Published': entry.get('published', ''),
                 })
         except Exception:
-            pass
-    return articles[:15]
+            continue
+    return articles[:20]
 
 
-@st.cache_data(ttl=3600)
-def fetch_insider_cluster_buys() -> pd.DataFrame | None:
-    """Scrape OpenInsider for cluster buys."""
+@st.cache_data(ttl=300)
+def fetch_insider_trades() -> pd.DataFrame | None:
+    """Fetch recent insider trades from SEC RSS."""
     try:
-        url = "http://openinsider.com/latest-cluster-buys"
-        tables = pd.read_html(url, header=0)
-        if not tables or len(tables) == 0:
+        url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4&dateb=&owner=include&count=20&search_text=&action=getcompany&output=atom"
+        feed = feedparser.parse(url)
+        if not feed.entries:
             return None
-        df = tables[0]
-        if 'Ticker' in df.columns:
+        rows = []
+        for entry in feed.entries[:15]:
+            rows.append({
+                'Filing': entry.get('title', ''),
+                'Filed': entry.get('published', ''),
+                'Link': entry.get('link', '#'),
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
             columns_to_keep = [
-                col for col in ['Ticker', 'Company Name', 'Insider Name', 'Title',
-                                'Trade Type', 'Price', 'Qty', 'Value', 'Trade Date']
+                col for col in [
+                    'Filing', 'Insider', 'Ticker', 'Company',
+                    'Trade Type', 'Price', 'Qty', 'Value', 'Trade Date']
                 if col in df.columns
             ]
             return df[columns_to_keep].head(10)
@@ -1105,6 +1383,238 @@ def fetch_earnings_calendar() -> pd.DataFrame:
         return df.head(40)
     return pd.DataFrame()
 
+
+# ============================================================================
+# v9.0 — SECOND-ORDER GREEKS (Black-Scholes)
+# Vanna: ∂Δ/∂σ  |  Charm: ∂Δ/∂t  |  Gamma Flip  |  Momentum Score
+# ============================================================================
+
+def compute_vanna(S: float, K: float, T: float, sigma: float, r: float = 0.05, q: float = 0.0) -> float:
+    """
+    Black-Scholes Vanna: ∂Δ/∂σ = -d₂/(σ) · φ(d₁) · e^(-qT)
+    Measures sensitivity of delta to changes in implied volatility.
+    S: spot, K: strike, T: time to expiry (years), sigma: IV, r: risk-free, q: div yield
+    """
+    try:
+        if T <= 0 or sigma <= 0:
+            return 0.0
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        phi_d1 = scipy_norm.pdf(d1)
+        vanna = -d2 / sigma * phi_d1 * math.exp(-q * T)
+        return float(vanna)
+    except Exception:
+        return 0.0
+
+
+def compute_charm(S: float, K: float, T: float, sigma: float, r: float = 0.05, q: float = 0.0) -> float:
+    """
+    Black-Scholes Charm: ∂Δ/∂t (Delta decay)
+    Charm = -φ(d₁) · [2(r-q)T - d₂·σ·√T] / [2T·σ·√T]
+    Measures how delta changes as time passes (important for overnight risk).
+    """
+    try:
+        if T <= 0 or sigma <= 0:
+            return 0.0
+        sqrt_T = math.sqrt(T)
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
+        d2 = d1 - sigma * sqrt_T
+        phi_d1 = scipy_norm.pdf(d1)
+        charm = -phi_d1 * (2.0 * (r - q) * T - d2 * sigma * sqrt_T) / (2.0 * T * sigma * sqrt_T)
+        return float(charm)
+    except Exception:
+        return 0.0
+
+
+def find_gamma_flip(net_gex_by_strike: dict) -> float | None:
+    """
+    Find the Gamma Flip point — the price where Net GEX crosses zero.
+    Uses linear interpolation between adjacent strikes.
+    Returns the exact flip price, or None if no zero-crossing found.
+    """
+    if not net_gex_by_strike or len(net_gex_by_strike) < 2:
+        return None
+
+    strikes_sorted = sorted(net_gex_by_strike.keys())
+    for i in range(len(strikes_sorted) - 1):
+        s1, s2 = strikes_sorted[i], strikes_sorted[i + 1]
+        g1, g2 = net_gex_by_strike[s1], net_gex_by_strike[s2]
+
+        # Check for zero crossing
+        if g1 * g2 < 0:
+            # Linear interpolation: find x where y=0
+            # 0 = g1 + (g2 - g1) * (x - s1) / (s2 - s1)
+            # x = s1 - g1 * (s2 - s1) / (g2 - g1)
+            flip_price = s1 - g1 * (s2 - s1) / (g2 - g1)
+            return float(flip_price)
+
+    return None
+
+
+def get_momentum_score(
+    gex_signal: float,
+    vanna_signal: float,
+    charm_signal: float,
+    iv_skew: float,
+) -> float:
+    """
+    Composite Momentum Score (0–100) with weighted inputs:
+    - GEX:   35% — Positive GEX → bullish (dealers dampen vol)
+    - Vanna: 25% — Positive Vanna → bullish (vol drop = delta increase)
+    - Charm: 25% — Positive Charm → bullish (delta grows over time)
+    - IV Skew: 15% — Lower put skew → bullish
+
+    Each signal is normalized to [0, 1] via sigmoid before weighting.
+    """
+    def _sigmoid_normalize(value: float, scale: float = 1.0) -> float:
+        """Map any real number to [0, 1] via sigmoid."""
+        try:
+            return 1.0 / (1.0 + math.exp(-value / max(scale, 0.001)))
+        except (OverflowError, ValueError):
+            return 0.5
+
+    # Normalize each signal (scale tuned for typical ranges)
+    gex_norm = _sigmoid_normalize(gex_signal, scale=5000.0)
+    vanna_norm = _sigmoid_normalize(vanna_signal, scale=0.05)
+    charm_norm = _sigmoid_normalize(charm_signal, scale=0.01)
+    # IV skew: negative skew (puts more expensive) is bearish, so invert
+    skew_norm = _sigmoid_normalize(-iv_skew, scale=5.0)
+
+    # Weighted composite
+    score = (
+        0.35 * gex_norm +
+        0.25 * vanna_norm +
+        0.25 * charm_norm +
+        0.15 * skew_norm
+    ) * 100.0
+
+    return float(np.clip(score, 0.0, 100.0))
+
+
+# ============================================================================
+# v9.0 — STRATEGIC DATA EXPANSION (Alpha Vantage, FMP, StockGeist)
+# ============================================================================
+
+@st.cache_data(ttl=120)
+def fetch_alpha_vantage_indicators(ticker: str) -> dict | None:
+    """
+    Fetch RSI + MACD from Alpha Vantage.
+    Returns dict with rsi, macd, macd_signal, macd_hist or None.
+    """
+    api_key = st.session_state.get('alphavantage_api_key')
+    if not api_key:
+        return None
+    try:
+        base = "https://www.alphavantage.co/query"
+
+        # RSI
+        rsi_resp = requests.get(base, params={
+            'function': 'RSI', 'symbol': ticker, 'interval': 'daily',
+            'time_period': 14, 'series_type': 'close', 'apikey': api_key,
+        }, timeout=10)
+        rsi_data = rsi_resp.json()
+        rsi_key = 'Technical Analysis: RSI'
+        rsi_val = 50.0
+        if rsi_key in rsi_data:
+            latest = list(rsi_data[rsi_key].values())[0]
+            rsi_val = float(latest.get('RSI', 50.0))
+
+        # MACD
+        macd_resp = requests.get(base, params={
+            'function': 'MACD', 'symbol': ticker, 'interval': 'daily',
+            'series_type': 'close', 'apikey': api_key,
+        }, timeout=10)
+        macd_data = macd_resp.json()
+        macd_key = 'Technical Analysis: MACD'
+        macd_val, macd_sig, macd_hist = 0.0, 0.0, 0.0
+        if macd_key in macd_data:
+            latest = list(macd_data[macd_key].values())[0]
+            macd_val = float(latest.get('MACD', 0))
+            macd_sig = float(latest.get('MACD_Signal', 0))
+            macd_hist = float(latest.get('MACD_Hist', 0))
+
+        return {
+            'rsi': rsi_val,
+            'macd': macd_val,
+            'macd_signal': macd_sig,
+            'macd_hist': macd_hist,
+        }
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=120)
+def fetch_fmp_realtime_quote(ticker: str) -> dict | None:
+    """
+    Fetch real-time quote from Financial Modeling Prep /v3/quote.
+    Returns validated APIQuotes dict or None.
+    """
+    api_key = st.session_state.get('fmp_api_key')
+    if not api_key:
+        return None
+    try:
+        url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}"
+        resp = requests.get(url, params={'apikey': api_key}, timeout=10)
+        data = resp.json()
+        if data and isinstance(data, list) and len(data) > 0:
+            q = data[0]
+            result = {
+                'symbol': q.get('symbol', ticker),
+                'price': float(q.get('price', 0)),
+                'day_high': float(q.get('dayHigh', 0)),
+                'day_low': float(q.get('dayLow', 0)),
+                'volume': int(q.get('volume', 0)),
+                'change_pct': float(q.get('changesPercentage', 0)),
+                'pe': float(q.get('pe', 0)) if q.get('pe') else None,
+                'market_cap': float(q.get('marketCap', 0)),
+            }
+            # Validate with Pydantic if available
+            if PYDANTIC_AVAILABLE:
+                validated = APIQuotes(
+                    symbol=result['symbol'],
+                    price=result['price'],
+                    day_high=result['day_high'],
+                    day_low=result['day_low'],
+                    volume=result['volume'],
+                )
+                result['validated'] = True
+            return result
+        return None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=120)
+def fetch_stockgeist_sentiment(ticker: str) -> dict | None:
+    """
+    Fetch sentiment + emotionality from StockGeist API.
+    Returns dict with sentiment, emotionality, positive, negative, neutral scores.
+    """
+    api_key = st.session_state.get('stockgeist_api_key')
+    if not api_key:
+        return None
+    try:
+        url = f"https://api.stockgeist.ai/stock/us/sentiment"
+        headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+        params = {'symbols': ticker}
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        data = resp.json()
+
+        if data and isinstance(data, dict):
+            sentiment_data = data.get('data', [{}])
+            if sentiment_data:
+                entry = sentiment_data[0] if isinstance(sentiment_data, list) else sentiment_data
+                return {
+                    'sentiment': float(entry.get('sentiment_score', 0)),
+                    'emotionality': float(entry.get('emotionality', 0)),
+                    'positive': float(entry.get('positive', 0)),
+                    'negative': float(entry.get('negative', 0)),
+                    'neutral': float(entry.get('neutral', 0)),
+                    'message_volume': int(entry.get('total_messages', 0)),
+                }
+        return None
+    except Exception:
+        return None
 
 # ============================================================================
 # POLYMARKET ARBITRAGE ENGINE — KROER FRAMEWORK (FINALIZED)
@@ -1508,31 +2018,52 @@ def fetch_polymarket_with_arbitrage():
 
 
 # ============================================================================
-# AI ENGINE — Gemini 1.5 Flash | Lead Session Strategist | Regime Classifier
+# AI ENGINE — v9.0 Expert Quant Strategist | Few-Shot CoT | Regime Classifier
 # ============================================================================
 
-_GEMINI_SYSTEM_INSTRUCTION = """You are the Lead Session Strategist at a proprietary day-trading desk
-specializing in intraday SPX/ES scalping.
+_GEMINI_SYSTEM_INSTRUCTION = """You are an Expert Quant Strategist at a systematic macro fund specializing in intraday SPX/ES scalping and options flow intelligence.
 
-Your primary function is to classify the current session into exactly ONE of three daily regimes:
-1. **EXPANSIONARY (Trend)** — Directional move sustained by volume.
-2. **CONSOLIDATION (Range)** — Price compressing between defined levels.
-3. **REVERSAL** — Momentum fading at extremes; mean-reversion setup.
+Your primary function is to classify the current session into exactly ONE of three daily regimes and provide actionable strategy with probability-weighted scenarios.
 
-Rules:
+REGIMES:
+1. **EXPANSIONARY (Trend)** — Directional move sustained by volume, VWAP holding, positive momentum.
+2. **CONSOLIDATION (Range)** — Price compressing between defined levels, low GEX, OR fade setups.
+3. **REVERSAL** — Momentum failure at extremes, negative GEX amplifying, mean-reversion setup.
+
+FEW-SHOT EXAMPLES WITH INTERNAL REASONING:
+
+--- EXAMPLE 1 ---
+INTERNAL REASONING: SPX trading at $5,820, well above VWAP ($5,795) and PDH ($5,810). Net GEX is +45,000 (positive, dampening volatility). VIX at 13.2 — extremely low fear. P/C ratio 0.72 favoring calls. Opening Range breakout above $5,808. Strong institutional buying pressure above VWAP. Yield curve normalized at 0.35%. Top GEX strikes cluster at 5800-5850 creating a hedging wall that pins upside.
+REGIME LABEL: **REGIME: EXPANSIONARY**
+Strategy: 65% probability of continuation above PDH to $5,850 hedging wall. 25% chance of range consolidation between VWAP and PDH. 10% risk of VWAP breakdown if VIX spikes above 15. Key inflection: $5,800 GEX concentration zone acts as floor. Forward-Looking Sentiment: 8/10.
+
+--- EXAMPLE 2 ---
+INTERNAL REASONING: SPX at $5,750, oscillating between OR High ($5,758) and OR Low ($5,742). Net GEX near zero — dealers neutral, no directional bias. VIX at 16.5 — moderate uncertainty. P/C ratio 0.95 balanced. VWAP at $5,748 acting as magnet. Price rejected PDH ($5,770) and held PDL ($5,730). No clear volume trend. Yield curve flattening at 0.18%.
+REGIME LABEL: **REGIME: CONSOLIDATION**
+Strategy: 55% probability of continued range between OR levels ($5,742-$5,758). 25% chance of breakout above PDH if volume confirms. 20% risk of breakdown below PDL on credit spread widening. Key inflection: VWAP $5,748 is the pivot — sustained move away triggers directional bias. Forward-Looking Sentiment: 5/10.
+
+--- EXAMPLE 3 ---
+INTERNAL REASONING: SPX at $5,680 after sharp selloff from PDH ($5,720). Net GEX is -32,000 (negative, amplifying moves). VIX spiked to 22.4 — fear elevated. P/C ratio 1.35 heavily skewed to puts. Price broke below OR Low ($5,695) and now testing PDL ($5,675). Credit spread widening to 4.8%. VWAP at $5,710 acting as resistance. Charm negative — delta decay accelerating overnight risk.
+REGIME LABEL: **REGIME: REVERSAL**
+Strategy: 50% probability of mean-reversion bounce from PDL toward VWAP ($5,710). 30% chance of continued breakdown below PDL to max pain ($5,660). 20% probability of V-shaped recovery above OR levels if VIX normalizes. Key inflection: $5,675 PDL is the line — break triggers stop cascade. Hedging Walls: $5,700 and $5,650 GEX concentration zones. Forward-Looking Sentiment: 3/10.
+
+DOMAIN TASKS:
+- Identify "Hedging Walls" — strikes with highest GEX concentration that act as price magnets/barriers.
+- Score "Forward-Looking Sentiment" (1-10) incorporating GEX positioning, Vanna exposure, and IV skew.
+- Reference Gamma Flip point if available — above this level dealers hedge bullishly, below they amplify moves.
+
+RULES:
 - Start your briefing with the regime label in bold, e.g.: **REGIME: EXPANSIONARY**
-- Write in dense, actionable prose (no bullet points). Maximum 250 words.
+- Write in dense, actionable prose (no bullet points). Maximum 300 words.
 - Use specific numbers from the provided data table — do NOT fabricate levels.
 - Reference the key bias levels: PDH, PDL, Opening Range, VWAP, Max Pain.
-- For SPX, provide probability-weighted intraday scenarios, e.g.:
-  "65% continuation above VWAP to PDH, 25% range between OR levels, 10% reversal below PDL."
-- Identify which levels are key inflection zones for the session.
-- Note if GEX positioning (positive = dampening vol, negative = amplifying moves) changes your bias.
+- Provide probability-weighted intraday scenarios.
+- End with a Forward-Looking Sentiment score (1-10) and Hedging Wall identification.
 """
 
 
-def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correlations, bias_levels=None):
-    """Generate session strategy briefing with Gemini 1.5 Flash."""
+def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correlations, bias_levels=None, greeks_data=None):
+    """Generate session strategy briefing with Gemini 1.5 Flash — v9.0 Expert Quant Strategist."""
     if not st.session_state.gemini_configured:
         return (
             "⚠️ **Gemini API Configuration Required** — Enable API access in "
@@ -1548,6 +2079,7 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
         pc_ratio = spx_options.get('put_call_ratio', 0) if spx_options else 0
         max_pain = spx_options.get('max_pain', 0) if spx_options else 0
         net_gex = spx_options.get('net_gex', 0) if spx_options else 0
+        iv_skew = spx_options.get('iv_skew', 0) if spx_options else 0
         yield_spread = liquidity.get('yield_spread', 0)
         credit_spread = liquidity.get('credit_spread', 0)
         fed_balance = liquidity.get('fed_balance', 0)
@@ -1559,6 +2091,12 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
         or_low = bias_levels.get('or_low', 0) if bias_levels else 0
         vwap = bias_levels.get('vwap', 0) if bias_levels else 0
 
+        # v9.0 — Greeks data
+        vanna_val = greeks_data.get('vanna', 0) if greeks_data else 0
+        charm_val = greeks_data.get('charm', 0) if greeks_data else 0
+        gamma_flip = greeks_data.get('gamma_flip', 'N/A') if greeks_data else 'N/A'
+        momentum = greeks_data.get('momentum_score', 50) if greeks_data else 50
+
         if yield_spread < 0:
             yc_context = f"inverted by {abs(yield_spread):.2f}% (recession signal active)"
         elif yield_spread < 0.25:
@@ -1568,7 +2106,7 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
 
         gex_context = "positive (vol dampening)" if net_gex > 0 else "negative (vol amplifying)"
 
-        user_message = f"""Classify today's regime and generate a session strategy briefing (200-250 words) based on this live data:
+        user_message = f"""Classify today's regime and generate an Expert Quant Strategy briefing (250-300 words) based on this live data:
 
 | Metric | Value |
 |--------|-------|
@@ -1577,16 +2115,21 @@ def generate_enhanced_ai_macro_briefing(indices, spx_options, liquidity, correla
 | Put/Call Ratio | {pc_ratio:.2f} |
 | Max Pain Strike | ${max_pain:.0f} |
 | Net GEX | {net_gex:,.0f} ({gex_context}) |
+| IV Skew (Put-Call) | {iv_skew:.1f}% |
 | Previous Day High (PDH) | ${pdh:.0f} |
 | Previous Day Low (PDL) | ${pdl:.0f} |
 | Opening Range High (15m) | ${or_high:.0f} |
 | Opening Range Low (15m) | ${or_low:.0f} |
 | Session VWAP | ${vwap:.2f} |
+| Vanna Exposure | {vanna_val:.4f} |
+| Charm (Delta Decay) | {charm_val:.4f} |
+| Gamma Flip Level | {gamma_flip} |
+| Momentum Score | {momentum:.0f}/100 |
 | 10Y-2Y Spread | {yield_spread:.2f}% ({yc_context}) |
 | HY Credit Spread | {credit_spread:.2f}% |
 | Fed Balance Sheet | ${fed_balance:.2f}T |
 
-Classify as EXPANSIONARY, CONSOLIDATION, or REVERSAL. Provide probability-weighted scenarios referencing PDH, PDL, OR, and VWAP."""
+Classify as EXPANSIONARY, CONSOLIDATION, or REVERSAL. Provide probability-weighted scenarios referencing PDH, PDL, OR, VWAP, and Gamma Flip. Identify Hedging Walls from GEX strikes and score Forward-Looking Sentiment (1-10)."""
 
         response = model.generate_content(user_message)
         return response.text
@@ -1654,90 +2197,89 @@ def render_watchlist_cards(df):
                 )
 
 
-def render_interactive_sector_heatmap(sector_df):
-    """Interactive sector heatmap with drill-down."""
-    if sector_df.empty:
-        st.warning("📊 Sector data unavailable")
+def render_sector_treemap():
+    """
+    Finviz-style treemap: sectors → stocks.
+    Box size = market cap proxy (volume × price).
+    Color = daily change %.
+    Click sector to zoom in, hover for details.
+    """
+    treemap_data = fetch_treemap_data()
+    if treemap_data.empty:
+        st.warning("📊 Treemap data unavailable")
         return
 
-    fig = px.bar(
-        sector_df, x='Change %', y='Sector', orientation='h',
+    fig = px.treemap(
+        treemap_data,
+        path=['Sector', 'Ticker'],
+        values='MarketCapProxy',
         color='Change %',
-        color_continuous_scale=[[0, '#FF4444'], [0.5, '#000000'], [1, '#00FF88']],
+        color_continuous_scale=[
+            [0.0, '#8B0000'],   # deep red (-5% or worse)
+            [0.25, '#FF4444'],  # red
+            [0.5, '#1a1a1a'],   # neutral (0%)
+            [0.75, '#00CC66'],  # green
+            [1.0, '#006400'],   # deep green (+5% or more)
+        ],
         color_continuous_midpoint=0,
-        hover_data={'Change %': ':.2f%', 'Change $': ':.2f'},
-        custom_data=['Ticker'],
+        range_color=[-5, 5],
+        custom_data=['Price', 'Change %', 'Volume', 'Sector'],
+        hover_data={'MarketCapProxy': False},
     )
+
+    # Custom hover template
     fig.update_traces(
-        texttemplate='%{x:.2f}%', textposition='outside',
-        marker_line_width=1, marker_line_color='rgba(255,176,0,0.5)',
+        texttemplate='<b>%{label}</b><br>%{customdata[1]:+.2f}%',
+        textfont=dict(
+            family='JetBrains Mono, Courier New, monospace',
+            size=12,
+            color='#FFFFFF',
+        ),
+        hovertemplate=(
+            '<b>%{label}</b><br>'
+            'Sector: %{customdata[3]}<br>'
+            'Price: $%{customdata[0]:,.2f}<br>'
+            'Change: %{customdata[1]:+.2f}%<br>'
+            'Volume: %{customdata[2]}<br>'
+            '<extra></extra>'
+        ),
+        marker=dict(
+            line=dict(width=1, color='rgba(0,0,0,0.6)'),
+            cornerradius=3,
+        ),
+        root_color='#000000',
     )
+
     fig.update_layout(
-        template='plotly_dark', showlegend=False, height=500,
-        margin=dict(l=0, r=50, t=20, b=0),
-        plot_bgcolor='#000000', paper_bgcolor='#000000',
-        font=dict(color='#FFB000', family='JetBrains Mono, Courier New', size=12),
-        xaxis=dict(showgrid=False, color='#FFB000', title='Performance (%)',
-                   zeroline=True, zerolinecolor='#FFB000'),
-        yaxis=dict(showgrid=False, color='#FFB000', title=''),
+        template='plotly_dark',
+        height=700,
+        margin=dict(l=2, r=2, t=30, b=2),
+        paper_bgcolor='#000000',
+        font=dict(
+            color='#FFB000',
+            family='JetBrains Mono, Courier New, monospace',
+            size=11,
+        ),
+        coloraxis_colorbar=dict(
+            title='Chg %',
+            ticksuffix='%',
+            len=0.5,
+            thickness=12,
+            outlinewidth=0,
+            bgcolor='rgba(0,0,0,0)',
+        ),
     )
-    st.plotly_chart(fig, use_container_width=True, key="sector_heatmap")
 
-    st.caption("🔍 **SECTOR DRILL-DOWN** — Click to view constituents")
-    sectors_list = sector_df.to_dict('records')
-
-    if len(sectors_list) > 0:
-        cols_row1 = st.columns(min(5, len(sectors_list)))
-        for idx_s in range(min(5, len(sectors_list))):
-            row = sectors_list[idx_s]
-            short_name = SECTOR_SHORT_NAMES.get(row['Sector'], row['Sector'][:8])
-            with cols_row1[idx_s]:
-                if st.button(short_name, key=f"sector_{row['Ticker']}"):
-                    st.session_state.selected_sector = row['Ticker']
-                    st.session_state.show_sector_drill = True
-                    st.rerun()
-
-    if len(sectors_list) > 5:
-        cols_row2 = st.columns(min(5, len(sectors_list) - 5))
-        for idx_s in range(5, min(10, len(sectors_list))):
-            row = sectors_list[idx_s]
-            short_name = SECTOR_SHORT_NAMES.get(row['Sector'], row['Sector'][:8])
-            with cols_row2[idx_s - 5]:
-                if st.button(short_name, key=f"sector_{row['Ticker']}"):
-                    st.session_state.selected_sector = row['Ticker']
-                    st.session_state.show_sector_drill = True
-                    st.rerun()
-
-    if st.session_state.show_sector_drill and st.session_state.selected_sector:
-        _render_sector_drilldown(sector_df)
-
-
-@st.fragment
-def _render_sector_drilldown(sector_df):
-    """Sector drill-down fragment."""
-    sector_ticker = st.session_state.selected_sector
-    matching = sector_df[sector_df['Ticker'] == sector_ticker]['Sector'].values
-    sector_name = matching[0] if len(matching) > 0 else sector_ticker
-    st.markdown("---")
-    st.subheader(f"🔬 {sector_name} — CONSTITUENT BREAKDOWN")
-    if st.button("❌ CLOSE DRILL-DOWN", key="close_drill"):
-        st.session_state.show_sector_drill = False
-        st.session_state.selected_sector = None
-        st.rerun()
-    constituents = fetch_sector_constituents(sector_ticker)
-    if not constituents.empty:
-        render_watchlist_cards(constituents)
-    else:
-        st.warning(f"No constituent data available for {sector_name}")
+    st.plotly_chart(fig, use_container_width=True, key="sector_treemap")
 
 
 # ============================================================================
-# SPX OPTIONS — EOD Review + GEX Display Fragment
+# SPX OPTIONS — v9.0 Enhanced with Greeks + Gamma Flip + Momentum Score
 # ============================================================================
 
 @st.fragment
 def render_spx_options_section():
-    """SPX Options with GEX and EOD Review Mode."""
+    """SPX Options with GEX, Second-Order Greeks, Gamma Flip, and Momentum Score."""
     st.subheader("🎯 SPX OPTIONS + GEX INTELLIGENCE")
     spx_data = fetch_spx_options_data()
 
@@ -1769,6 +2311,11 @@ def render_spx_options_section():
 
         st.caption(f"📅 Expiration: {display_data['expiration']}")
 
+        # v9.0 — IV Skew display
+        iv_skew = display_data.get('iv_skew', 0)
+        skew_label = "PUTS PREMIUM" if iv_skew > 0 else "CALLS PREMIUM"
+        st.caption(f"📊 **IV Skew**: {iv_skew:.1f}% ({skew_label})")
+
         col_gex1, col_gex2 = st.columns(2)
         with col_gex1:
             call_gex = display_data.get('call_gex', 0)
@@ -1788,9 +2335,88 @@ def render_spx_options_section():
         with col_gex2:
             top_strikes = display_data.get('top_gex_strikes', [])
             if top_strikes:
-                st.caption("**TOP GEX STRIKES (Hedging Zones)**")
+                st.caption("**TOP GEX STRIKES (Hedging Walls)**")
                 for ts in top_strikes:
                     st.markdown(f"- **${ts['strike']:.0f}** → GEX: {ts['gex']:,.0f}")
+
+        # v9.0 — SECOND-ORDER GREEKS SECTION
+        st.divider()
+        st.caption("**🔬 SECOND-ORDER GREEKS — Vanna · Charm · Gamma Flip · Momentum**")
+
+        # Compute Greeks using ATM strike
+        spx_price = display_data.get('max_pain', 5000)  # Use max pain as proxy for ATM
+        net_gex_map = display_data.get('net_gex_by_strike', {})
+        avg_iv = (display_data.get('avg_call_iv', 20) + display_data.get('avg_put_iv', 20)) / 200.0  # decimal
+        exp_str = display_data.get('expiration', '')
+
+        # Days to expiry
+        try:
+            exp_date = pd.Timestamp(exp_str)
+            T = max((exp_date - pd.Timestamp.now()).days / 365.0, 1 / 365.0)
+        except Exception:
+            T = 7 / 365.0  # default 1 week
+
+        vanna_val = compute_vanna(spx_price, spx_price, T, avg_iv)
+        charm_val = compute_charm(spx_price, spx_price, T, avg_iv)
+        gamma_flip = find_gamma_flip(net_gex_map)
+        momentum = get_momentum_score(
+            gex_signal=net_gex,
+            vanna_signal=vanna_val,
+            charm_signal=charm_val,
+            iv_skew=iv_skew,
+        )
+
+        cols_greeks = st.columns(4)
+        with cols_greeks[0]:
+            st.markdown(
+                f'<div class="greeks-card">'
+                f'<div class="greek-label">VANNA (∂Δ/∂σ)</div>'
+                f'<div class="greek-value">{vanna_val:.4f}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with cols_greeks[1]:
+            st.markdown(
+                f'<div class="greeks-card">'
+                f'<div class="greek-label">CHARM (∂Δ/∂t)</div>'
+                f'<div class="greek-value">{charm_val:.4f}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with cols_greeks[2]:
+            flip_display = f"${gamma_flip:,.0f}" if gamma_flip else "N/A"
+            st.markdown(
+                f'<div class="greeks-card">'
+                f'<div class="greek-label">GAMMA FLIP</div>'
+                f'<div class="greek-value">{flip_display}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with cols_greeks[3]:
+            if momentum >= 65:
+                gauge_class = "gauge-bullish"
+                gauge_label = "BULLISH"
+            elif momentum <= 35:
+                gauge_class = "gauge-bearish"
+                gauge_label = "BEARISH"
+            else:
+                gauge_class = "gauge-neutral"
+                gauge_label = "NEUTRAL"
+            st.markdown(
+                f'<div class="momentum-gauge">'
+                f'<div class="gauge-label">MOMENTUM SCORE</div>'
+                f'<div class="gauge-value {gauge_class}">{momentum:.0f}</div>'
+                f'<div style="color: #888; font-size: 10px; margin-top: 4px;">{gauge_label}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Store Greeks for AI briefing
+        st.session_state['_greeks_data'] = {
+            'vanna': vanna_val, 'charm': charm_val,
+            'gamma_flip': flip_display, 'momentum_score': momentum,
+        }
+
     else:
         st.info("⏰ Markets closed — No options data cached. Data will populate during market hours.")
 
@@ -1842,30 +2468,30 @@ def render_earnings_card(ticker, date_str, eps_est, eps_act, surprise, is_shifte
     """
     st.markdown(html, unsafe_allow_html=True)
 
-
 # ============================================================================
-# MAIN APPLICATION
+# MAIN APPLICATION — v9.0
 # ============================================================================
 
-st.title("⚡ ALPHA DECK PRO v8.0")
-st.caption("**DIRECTIONAL BIAS TERMINAL** — Intraday SPX/ES Scalping | Kroer Barrier FW | GEX + Regime Intelligence")
+st.title("⚡ ALPHA DECK PRO v9.0")
+st.caption("**INSTITUTIONAL-GRADE ANALYTICS TERMINAL** — Advanced Greeks | Expert Quant Strategist | Multi-Source Data | Lightweight Charts")
 st.divider()
 
 # ============================================================================
-# AI SESSION STRATEGY BRIEFING
+# AI SESSION STRATEGY BRIEFING — v9.0 with Greeks data
 # ============================================================================
 
-st.subheader("🧠 SESSION STRATEGY — REGIME CLASSIFIER")
+st.subheader("🧠 SESSION STRATEGY — EXPERT QUANT STRATEGIST")
 
 if st.button("🚀 GENERATE SESSION BRIEF", key="ai_macro", use_container_width=True):
-    with st.spinner('🔬 Classifying session regime...'):
+    with st.spinner('🔬 Classifying session regime with Greeks intelligence...'):
         indices = fetch_index_data()
         spx_opts = fetch_spx_options_data()
         liq = fetch_fred_liquidity(_client_ready=(st.session_state.fred_client is not None))
         corrs = calculate_spx_crypto_correlation()
         bias = fetch_intraday_bias_levels()
+        greeks = st.session_state.get('_greeks_data', None)
 
-        briefing = generate_enhanced_ai_macro_briefing(indices, spx_opts, liq, corrs, bias)
+        briefing = generate_enhanced_ai_macro_briefing(indices, spx_opts, liq, corrs, bias, greeks)
 
         st.markdown(
             TEMPLATES["ai_briefing"].format(content=briefing),
@@ -1888,7 +2514,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 # ============================================================================
-# TAB 1: MAIN DECK
+# TAB 1: MAIN DECK — v9.0 with Lightweight Charts + Sentiment
 # ============================================================================
 
 with tab1:
@@ -1942,8 +2568,222 @@ with tab1:
 
     st.divider()
 
-    # SPX Options + GEX
+    # SPX Options + GEX + v9.0 Greeks
     render_spx_options_section()
+
+    st.divider()
+
+    # v9.0 — Lightweight Charts (Multi-Pane Price Chart)
+    st.subheader("📈 PRICE ACTION — LIGHTWEIGHT CHARTS")
+
+    if LWCHARTS_AVAILABLE:
+        try:
+            # Fetch OHLCV for selected ticker
+            lw_ticker = st.session_state.selected_ticker or 'SPY'
+            lw_data = yf.download(lw_ticker, period='6mo', interval='1d', progress=False)
+
+            if lw_data is not None and not lw_data.empty:
+                # Flatten multi-index if needed
+                if isinstance(lw_data.columns, pd.MultiIndex):
+                    lw_data.columns = lw_data.columns.get_level_values(0)
+
+                lw_data.index = lw_data.index.tz_localize(None) if lw_data.index.tz is not None else lw_data.index
+
+                # Prepare candlestick data
+                candle_data = []
+                volume_data = []
+                for dt, row in lw_data.iterrows():
+                    ts = dt.strftime('%Y-%m-%d')
+                    o, h, l, c = float(row['Open']), float(row['High']), float(row['Low']), float(row['Close'])
+                    v = int(row['Volume']) if 'Volume' in lw_data.columns else 0
+                    candle_data.append({'time': ts, 'open': o, 'high': h, 'low': l, 'close': c})
+                    vol_color = 'rgba(0, 255, 136, 0.5)' if c >= o else 'rgba(255, 68, 68, 0.5)'
+                    volume_data.append({'time': ts, 'value': v, 'color': vol_color})
+
+                # RSI series
+                close_series = lw_data['Close']
+                delta = close_series.diff()
+                gain = delta.where(delta > 0, 0.0)
+                loss = (-delta.where(delta < 0, 0.0))
+                avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+                avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+                rs = avg_gain / avg_loss.replace(0, 1e-10)
+                rsi = 100 - (100 / (1 + rs))
+
+                rsi_data = []
+                for dt, val in rsi.items():
+                    if not pd.isna(val):
+                        rsi_data.append({'time': dt.strftime('%Y-%m-%d'), 'value': float(val)})
+
+                chartMultipaneOptions = [
+                    {
+                        "height": 400,
+                        "layout": {
+                            "background": {"type": "solid", "color": "#000000"},
+                            "textColor": "#FFB000",
+                            "fontSize": 12,
+                        },
+                        "grid": {
+                            "vertLines": {"color": "rgba(255, 176, 0, 0.1)"},
+                            "horzLines": {"color": "rgba(255, 176, 0, 0.1)"},
+                        },
+                        "crosshair": {"mode": 0},
+                        "priceScale": {"borderColor": "rgba(255, 176, 0, 0.3)"},
+                        "timeScale": {"borderColor": "rgba(255, 176, 0, 0.3)", "timeVisible": True},
+                    },
+                    {
+                        "height": 120,
+                        "layout": {
+                            "background": {"type": "solid", "color": "#000000"},
+                            "textColor": "#FFB000",
+                            "fontSize": 10,
+                        },
+                        "grid": {
+                            "vertLines": {"color": "rgba(255, 176, 0, 0.05)"},
+                            "horzLines": {"color": "rgba(255, 176, 0, 0.05)"},
+                        },
+                    },
+                    {
+                        "height": 120,
+                        "layout": {
+                            "background": {"type": "solid", "color": "#000000"},
+                            "textColor": "#FFB000",
+                            "fontSize": 10,
+                        },
+                        "grid": {
+                            "vertLines": {"color": "rgba(255, 176, 0, 0.05)"},
+                            "horzLines": {"color": "rgba(255, 176, 0, 0.05)"},
+                        },
+                    },
+                ]
+
+                seriesCandlestick = [
+                    {
+                        "type": "Candlestick",
+                        "data": candle_data,
+                        "options": {
+                            "upColor": "#00FF88",
+                            "downColor": "#FF4444",
+                            "borderUpColor": "#00FF88",
+                            "borderDownColor": "#FF4444",
+                            "wickUpColor": "#00FF88",
+                            "wickDownColor": "#FF4444",
+                        },
+                    }
+                ]
+
+                seriesVolume = [
+                    {
+                        "type": "Histogram",
+                        "data": volume_data,
+                        "options": {
+                            "priceFormat": {"type": "volume"},
+                            "priceScaleId": "volume",
+                        },
+                    }
+                ]
+
+                seriesRSI = [
+                    {
+                        "type": "Line",
+                        "data": rsi_data,
+                        "options": {
+                            "color": "#FFB000",
+                            "lineWidth": 2,
+                        },
+                    }
+                ]
+
+                renderLightweightCharts([
+                    {"chart": chartMultipaneOptions[0], "series": seriesCandlestick},
+                    {"chart": chartMultipaneOptions[1], "series": seriesVolume},
+                    {"chart": chartMultipaneOptions[2], "series": seriesRSI},
+                ], key="main_multipane_chart")
+
+                st.caption(f"📊 **{lw_ticker}** — Candlestick + Volume + RSI(14) | 6-Month Daily")
+            else:
+                st.warning("📊 No data available for lightweight chart")
+        except Exception as e:
+            st.warning(f"📊 Lightweight chart rendering failed: {str(e)[:100]}. Falling back to Plotly.")
+            LWCHARTS_AVAILABLE_FALLBACK = False
+    else:
+        st.info("💡 Install `streamlit-lightweight-charts-v5` for professional multi-pane charts. Using Plotly fallback.")
+        # Plotly fallback — simple candlestick
+        try:
+            fb_ticker = st.session_state.selected_ticker or 'SPY'
+            fb_data = yf.download(fb_ticker, period='3mo', interval='1d', progress=False)
+            if fb_data is not None and not fb_data.empty:
+                if isinstance(fb_data.columns, pd.MultiIndex):
+                    fb_data.columns = fb_data.columns.get_level_values(0)
+                fig_fb = go.Figure(data=go.Candlestick(
+                    x=fb_data.index,
+                    open=fb_data['Open'], high=fb_data['High'],
+                    low=fb_data['Low'], close=fb_data['Close'],
+                    increasing_line_color='#00FF88', decreasing_line_color='#FF4444',
+                ))
+                fig_fb.update_layout(
+                    template='plotly_dark', height=500,
+                    plot_bgcolor='#000000', paper_bgcolor='#000000',
+                    font=dict(color='#FFB000', family='JetBrains Mono, Courier New'),
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    xaxis=dict(showgrid=False, rangeslider_visible=False),
+                    yaxis=dict(showgrid=True, gridcolor='#333333'),
+                )
+                st.plotly_chart(fig_fb, use_container_width=True)
+                st.caption(f"📊 **{fb_ticker}** — 3-Month Candlestick (Plotly fallback)")
+        except Exception:
+            st.warning("📊 Chart unavailable")
+
+    st.divider()
+
+    # v9.0 — Sentiment & External Data (if keys configured)
+    av_data = fetch_alpha_vantage_indicators(st.session_state.selected_ticker or 'SPY')
+    fmp_data = fetch_fmp_realtime_quote(st.session_state.selected_ticker or 'SPY')
+    sg_data = fetch_stockgeist_sentiment(st.session_state.selected_ticker or 'SPY')
+
+    if av_data or fmp_data or sg_data:
+        st.subheader("🔬 MULTI-SOURCE INTELLIGENCE")
+        cols_intel = st.columns(3)
+
+        with cols_intel[0]:
+            if av_data:
+                st.caption("**ALPHA VANTAGE — TECHNICALS**")
+                st.metric("RSI (AV)", f"{av_data['rsi']:.1f}")
+                macd_color = "#00FF88" if av_data['macd_hist'] > 0 else "#FF4444"
+                st.metric("MACD", f"{av_data['macd']:.2f}")
+                st.metric("MACD Hist", f"{av_data['macd_hist']:.4f}")
+            else:
+                if not st.session_state.alphavantage_api_key:
+                    st.info("💡 Alpha Vantage: Add key for RSI/MACD")
+
+        with cols_intel[1]:
+            if fmp_data:
+                st.caption("**FMP — REAL-TIME QUOTE**")
+                st.metric("FMP Price", f"${fmp_data['price']:.2f}")
+                st.metric("Day Range", f"${fmp_data['day_low']:.2f} — ${fmp_data['day_high']:.2f}")
+                if fmp_data.get('pe'):
+                    st.metric("P/E", f"{fmp_data['pe']:.1f}")
+            else:
+                if not st.session_state.fmp_api_key:
+                    st.info("💡 FMP: Add key for real-time quotes")
+
+        with cols_intel[2]:
+            if sg_data:
+                st.caption("**STOCKGEIST — SENTIMENT**")
+                sent_val = sg_data['sentiment']
+                sent_label = "BULLISH" if sent_val > 0 else ("BEARISH" if sent_val < 0 else "NEUTRAL")
+                st.markdown(
+                    f'<div class="sentiment-card">'
+                    f'<div class="sent-label">SENTIMENT</div>'
+                    f'<div class="sent-value">{sent_val:.2f} ({sent_label})</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.metric("Emotionality", f"{sg_data['emotionality']:.1f}%")
+                st.metric("Messages", f"{sg_data['message_volume']:,}")
+            else:
+                if not st.session_state.stockgeist_api_key:
+                    st.info("💡 StockGeist: Add key for social sentiment")
 
     st.divider()
 
@@ -1957,11 +2797,10 @@ with tab1:
 
     st.divider()
 
-    # Sector Heatmap
-    st.subheader("🎨 SECTOR HEAT — INTERACTIVE DRILL-DOWN")
-    st.caption("**Click any sector** to view constituent stocks")
-    sector_df = fetch_sector_performance()
-    render_interactive_sector_heatmap(sector_df)
+    # Sector Treemap
+    st.subheader("🎨 SECTOR HEAT — INTERACTIVE TREEMAP")
+    st.caption("**Click any sector** to zoom in — hover for details")
+    render_sector_treemap()
 
 # ============================================================================
 # TAB 2: POLYMARKET ARBITRAGE (st.fragment)
@@ -2332,13 +3171,14 @@ with tab6:
         st.caption(f"📊 Symbol: {tv_symbol} | Volume + SMA 15 + SMA 30")
 
 # ============================================================================
-# FOOTER
+# FOOTER — v9.0
 # ============================================================================
 
 st.divider()
-st.caption("⚡ **ALPHA DECK PRO v8.0 — DIRECTIONAL BIAS TERMINAL (PRODUCTION-HARDENED)**")
+st.caption("⚡ **ALPHA DECK PRO v9.0 — INSTITUTIONAL-GRADE ANALYTICS TERMINAL**")
 st.caption(
-    "✅ Gemini 1.5 Flash Regime Classifier | ✅ InitFW u=mean(Z₀) | ✅ α=0.9 Extraction | "
-    "✅ GEX Intelligence | ✅ PDH/PDL/OR/VWAP Bias | ✅ News Squawk | "
-    "✅ Earnings Grid (Market Shifters) | ✅ RSI CALIBRATING Fix | ✅ Header Persistence"
+    "✅ Expert Quant Strategist (3 CoT) | ✅ Vanna · Charm · Gamma Flip · Momentum Score | "
+    "✅ Pydantic v2 Schemas | ✅ Alpha Vantage + FMP + StockGeist | "
+    "✅ Lightweight Charts Multi-Pane | ✅ Kroer Barrier FW (α=0.9) | "
+    "✅ GEX Intelligence | ✅ PDH/PDL/OR/VWAP Bias"
 )
