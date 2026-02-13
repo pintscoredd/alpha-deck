@@ -400,22 +400,17 @@ SECTOR_ETF_MAP = {
 }
 
 SECTOR_CONSTITUENTS = {
-    'XLK': ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'AMD', 'ORCL', 'INTC', 'MU', 'TXN', 'PLTR',
-            'CRM', 'AMAT', 'KLAC', 'LRCX', 'CDNS', 'INTU', 'IBM', 'ADI', 'STX', 'UBER'],
-    'XLF': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'BRK-B', 'V', 'MA', 'AXP', 'BLK',
-            'SPGI', 'ICE', 'C', 'COF', 'PNC', 'USB', 'BX', 'KKR', 'CB', 'COIN'],
-    'XLE': ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'VLO', 'PSX', 'MPC', 'OXY', 'HAL'],
-    'XLV': ['UNH', 'JNJ', 'LLY', 'ABBV', 'MRK', 'TMO', 'DHR', 'PFE', 'ABT', 'BMY',
-            'GILD', 'ISRG', 'CVS', 'SYK', 'BSX', 'MDT', 'CI', 'MCK', 'HCA', 'AMGN'],
-    'XLI': ['CAT', 'UNP', 'HON', 'GE', 'RTX', 'DE', 'LMT', 'BA', 'ETN', 'ITW',
-            'NOC', 'GD', 'MMM', 'WM', 'GEV', 'PH', 'IR', 'CTAS', 'CSX', 'JCI'],
-    'XLP': ['PG', 'PEP', 'KO', 'COST', 'WMT', 'PM', 'CL', 'EL', 'MO', 'MDLZ'],
-    'XLY': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'LOW', 'BKNG', 'TJX', 'RCL',
-            'MAR', 'HLT', 'DHI', 'CVNA', 'F', 'GM'],
-    'XLB': ['LIN', 'APD', 'SHW', 'ECL', 'FCX', 'NEM', 'CRH', 'NUE', 'DOW', 'DD'],
-    'XLRE': ['PLD', 'AMT', 'EQIX', 'SPG', 'O', 'WELL', 'DLR', 'PSA', 'AVB', 'ARE'],
-    'XLC': ['META', 'GOOGL', 'NFLX', 'DIS', 'CMCSA', 'T', 'VZ', 'TMUS', 'EA', 'TTWO'],
-    'XLU': ['NEE', 'SO', 'DUK', 'AEP', 'D', 'SRE', 'EXC', 'XEL', 'CEG', 'VST'],
+    'XLK': ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'AMD'],
+    'XLF': ['JPM', 'BAC', 'WFC', 'GS', 'MS'],
+    'XLE': ['XOM', 'CVX', 'COP', 'SLB', 'EOG'],
+    'XLV': ['UNH', 'JNJ', 'LLY', 'ABBV', 'MRK'],
+    'XLI': ['CAT', 'UNP', 'HON', 'GE', 'RTX'],
+    'XLP': ['PG', 'PEP', 'KO', 'COST', 'WMT'],
+    'XLY': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE'],
+    'XLB': ['LIN', 'APD', 'SHW', 'ECL', 'FCX'],
+    'XLRE': ['PLD', 'AMT', 'EQIX', 'SPG', 'O'],
+    'XLC': ['META', 'GOOGL', 'NFLX', 'DIS', 'CMCSA'],
+    'XLU': ['NEE', 'SO', 'DUK', 'AEP', 'D'],
 }
 
 SECTOR_SHORT_NAMES = {
@@ -792,69 +787,6 @@ def fetch_sector_constituents(sector_ticker: str) -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame()
     return fetch_watchlist_data(tuple(tickers))
-
-
-@st.cache_data(ttl=120)
-def fetch_treemap_data() -> pd.DataFrame:
-    """
-    Build flat DataFrame for Finviz-style sector treemap.
-    Batch-downloads all constituents across all sectors.
-    Returns: Sector | Ticker | Price | Change % | Volume | MarketCapProxy
-    """
-    # Collect all tickers and their sector mapping
-    ticker_to_sector = {}
-    all_tickers = []
-    for etf, sector_name in SECTOR_ETF_MAP.items():
-        for tk in SECTOR_CONSTITUENTS.get(etf, []):
-            ticker_to_sector[tk] = sector_name
-            all_tickers.append(tk)
-
-    if not all_tickers:
-        return pd.DataFrame()
-
-    batch = _batch_download(tuple(all_tickers), period='5d')
-    if batch.empty:
-        return pd.DataFrame()
-
-    rows = []
-    for tk in all_tickers:
-        try:
-            if len(all_tickers) == 1:
-                hist = batch
-            else:
-                if tk not in batch.columns.get_level_values(0):
-                    continue
-                hist = batch[tk]
-
-            close = hist['Close'].dropna()
-            if close.empty or len(close) < 2:
-                continue
-
-            price = float(close.iloc[-1])
-            prev = float(close.iloc[-2])
-            chg_pct = ((price - prev) / prev * 100) if prev != 0 else 0.0
-
-            vol_col = hist['Volume'].dropna() if 'Volume' in hist.columns else pd.Series([0])
-            volume = int(vol_col.iloc[-1]) if not vol_col.empty else 0
-
-            # Market cap proxy: price x volume (bigger companies = bigger boxes)
-            mkt_proxy = max(price * volume, 1)
-
-            vol_str = f"{volume / 1e6:.1f}M" if volume >= 1e6 else f"{volume / 1e3:.0f}K"
-
-            rows.append({
-                'Sector': ticker_to_sector[tk],
-                'Ticker': tk,
-                'Price': price,
-                'Change %': float(chg_pct),
-                'Volume': vol_str,
-                'MarketCapProxy': mkt_proxy,
-            })
-        except Exception:
-            continue
-
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
-
 
 
 @st.cache_data(ttl=60)
@@ -1722,80 +1654,81 @@ def render_watchlist_cards(df):
                 )
 
 
-def render_sector_treemap():
-    """
-    Finviz-style treemap: sectors → stocks.
-    Box size = market cap proxy (volume × price).
-    Color = daily change %.
-    Click sector to zoom in, hover for details.
-    """
-    treemap_data = fetch_treemap_data()
-    if treemap_data.empty:
-        st.warning("📊 Treemap data unavailable")
+def render_interactive_sector_heatmap(sector_df):
+    """Interactive sector heatmap with drill-down."""
+    if sector_df.empty:
+        st.warning("📊 Sector data unavailable")
         return
 
-    fig = px.treemap(
-        treemap_data,
-        path=['Sector', 'Ticker'],
-        values='MarketCapProxy',
+    fig = px.bar(
+        sector_df, x='Change %', y='Sector', orientation='h',
         color='Change %',
-        color_continuous_scale=[
-            [0.0, '#8B0000'],   # deep red (-5% or worse)
-            [0.25, '#FF4444'],  # red
-            [0.5, '#1a1a1a'],   # neutral (0%)
-            [0.75, '#00CC66'],  # green
-            [1.0, '#006400'],   # deep green (+5% or more)
-        ],
+        color_continuous_scale=[[0, '#FF4444'], [0.5, '#000000'], [1, '#00FF88']],
         color_continuous_midpoint=0,
-        range_color=[-5, 5],
-        custom_data=['Price', 'Change %', 'Volume', 'Sector'],
-        hover_data={'MarketCapProxy': False},
+        hover_data={'Change %': ':.2f%', 'Change $': ':.2f'},
+        custom_data=['Ticker'],
     )
-
-    # Custom hover template
     fig.update_traces(
-        texttemplate='<b>%{label}</b><br>%{customdata[1]:+.2f}%',
-        textfont=dict(
-            family='JetBrains Mono, Courier New, monospace',
-            size=12,
-            color='#FFFFFF',
-        ),
-        hovertemplate=(
-            '<b>%{label}</b><br>'
-            'Sector: %{customdata[3]}<br>'
-            'Price: $%{customdata[0]:,.2f}<br>'
-            'Change: %{customdata[1]:+.2f}%<br>'
-            'Volume: %{customdata[2]}<br>'
-            '<extra></extra>'
-        ),
-        marker=dict(
-            line=dict(width=1, color='rgba(0,0,0,0.6)'),
-            cornerradius=3,
-        ),
-        root_color='#000000',
+        texttemplate='%{x:.2f}%', textposition='outside',
+        marker_line_width=1, marker_line_color='rgba(255,176,0,0.5)',
     )
-
     fig.update_layout(
-        template='plotly_dark',
-        height=700,
-        margin=dict(l=2, r=2, t=30, b=2),
-        paper_bgcolor='#000000',
-        font=dict(
-            color='#FFB000',
-            family='JetBrains Mono, Courier New, monospace',
-            size=11,
-        ),
-        coloraxis_colorbar=dict(
-            title='Chg %',
-            ticksuffix='%',
-            len=0.5,
-            thickness=12,
-            outlinewidth=0,
-            bgcolor='rgba(0,0,0,0)',
-        ),
+        template='plotly_dark', showlegend=False, height=500,
+        margin=dict(l=0, r=50, t=20, b=0),
+        plot_bgcolor='#000000', paper_bgcolor='#000000',
+        font=dict(color='#FFB000', family='JetBrains Mono, Courier New', size=12),
+        xaxis=dict(showgrid=False, color='#FFB000', title='Performance (%)',
+                   zeroline=True, zerolinecolor='#FFB000'),
+        yaxis=dict(showgrid=False, color='#FFB000', title=''),
     )
+    st.plotly_chart(fig, use_container_width=True, key="sector_heatmap")
 
-    st.plotly_chart(fig, use_container_width=True, key="sector_treemap")
+    st.caption("🔍 **SECTOR DRILL-DOWN** — Click to view constituents")
+    sectors_list = sector_df.to_dict('records')
+
+    if len(sectors_list) > 0:
+        cols_row1 = st.columns(min(5, len(sectors_list)))
+        for idx_s in range(min(5, len(sectors_list))):
+            row = sectors_list[idx_s]
+            short_name = SECTOR_SHORT_NAMES.get(row['Sector'], row['Sector'][:8])
+            with cols_row1[idx_s]:
+                if st.button(short_name, key=f"sector_{row['Ticker']}"):
+                    st.session_state.selected_sector = row['Ticker']
+                    st.session_state.show_sector_drill = True
+                    st.rerun()
+
+    if len(sectors_list) > 5:
+        cols_row2 = st.columns(min(5, len(sectors_list) - 5))
+        for idx_s in range(5, min(10, len(sectors_list))):
+            row = sectors_list[idx_s]
+            short_name = SECTOR_SHORT_NAMES.get(row['Sector'], row['Sector'][:8])
+            with cols_row2[idx_s - 5]:
+                if st.button(short_name, key=f"sector_{row['Ticker']}"):
+                    st.session_state.selected_sector = row['Ticker']
+                    st.session_state.show_sector_drill = True
+                    st.rerun()
+
+    if st.session_state.show_sector_drill and st.session_state.selected_sector:
+        _render_sector_drilldown(sector_df)
+
+
+@st.fragment
+def _render_sector_drilldown(sector_df):
+    """Sector drill-down fragment."""
+    sector_ticker = st.session_state.selected_sector
+    matching = sector_df[sector_df['Ticker'] == sector_ticker]['Sector'].values
+    sector_name = matching[0] if len(matching) > 0 else sector_ticker
+    st.markdown("---")
+    st.subheader(f"🔬 {sector_name} — CONSTITUENT BREAKDOWN")
+    if st.button("❌ CLOSE DRILL-DOWN", key="close_drill"):
+        st.session_state.show_sector_drill = False
+        st.session_state.selected_sector = None
+        st.rerun()
+    constituents = fetch_sector_constituents(sector_ticker)
+    if not constituents.empty:
+        render_watchlist_cards(constituents)
+    else:
+        st.warning(f"No constituent data available for {sector_name}")
 
 
 # ============================================================================
@@ -2024,10 +1957,11 @@ with tab1:
 
     st.divider()
 
-    # Sector Treemap
-    st.subheader("🎨 SECTOR HEAT — INTERACTIVE TREEMAP")
-    st.caption("**Click any sector** to zoom in — hover for details")
-    render_sector_treemap()
+    # Sector Heatmap
+    st.subheader("🎨 SECTOR HEAT — INTERACTIVE DRILL-DOWN")
+    st.caption("**Click any sector** to view constituent stocks")
+    sector_df = fetch_sector_performance()
+    render_interactive_sector_heatmap(sector_df)
 
 # ============================================================================
 # TAB 2: POLYMARKET ARBITRAGE (st.fragment)
