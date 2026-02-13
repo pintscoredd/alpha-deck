@@ -2209,6 +2209,9 @@ def render_sector_treemap():
         st.warning("📊 Treemap data unavailable")
         return
 
+    # Round Change % to 2 decimals to avoid floating-point noise
+    treemap_data['Change %'] = treemap_data['Change %'].round(2)
+
     fig = px.treemap(
         treemap_data,
         path=['Sector', 'Ticker'],
@@ -2794,6 +2797,39 @@ with tab1:
                          'META', 'GOOGL', 'COIN', 'MSTR', 'SPY', 'QQQ')
     watchlist_df = fetch_watchlist_data(watchlist_tickers)
     render_watchlist_cards(watchlist_df)
+
+    st.divider()
+
+    # Sector Performance Bar Chart
+    st.subheader("📊 SECTOR PERFORMANCE")
+    sector_perf = fetch_sector_performance()
+    if not sector_perf.empty:
+        sector_perf_display = sector_perf.copy()
+        sector_perf_display['Color'] = sector_perf_display['Change %'].apply(
+            lambda x: '#00FF88' if x >= 0 else '#FF4444'
+        )
+        fig_sector = go.Figure()
+        fig_sector.add_trace(go.Bar(
+            y=sector_perf_display['Sector'],
+            x=sector_perf_display['Change %'],
+            orientation='h',
+            marker_color=sector_perf_display['Color'],
+            text=sector_perf_display['Change %'].apply(lambda x: f"{x:+.2f}%"),
+            textposition='outside',
+            textfont=dict(color='#FFB000', family='JetBrains Mono, Courier New', size=11),
+        ))
+        fig_sector.update_layout(
+            template='plotly_dark', height=400,
+            plot_bgcolor='#000000', paper_bgcolor='#000000',
+            font=dict(color='#FFB000', family='JetBrains Mono, Courier New'),
+            margin=dict(l=120, r=60, t=20, b=20),
+            xaxis=dict(showgrid=True, gridcolor='#333333', title='Change %', color='#FFB000',
+                       zeroline=True, zerolinecolor='rgba(255,176,0,0.3)', zerolinewidth=1),
+            yaxis=dict(showgrid=False, color='#FFB000', autorange='reversed'),
+        )
+        st.plotly_chart(fig_sector, use_container_width=True)
+    else:
+        st.warning("📊 Sector data unavailable")
 
     st.divider()
 
