@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 import requests
 import feedparser
 from datetime import datetime, timedelta, date
+import html as html_module
 import numpy as np
 import pytz
 from scipy.optimize import linprog, minimize
@@ -938,8 +939,12 @@ def fetch_insider_cluster_buys() -> pd.DataFrame | None:
 
 
 @st.cache_data(ttl=3600)
-def fetch_fred_liquidity() -> dict:
-    """Fetch Fed liquidity data using get_series()."""
+def fetch_fred_liquidity(_client_ready: bool = False) -> dict:
+    """
+    Fetch Fed liquidity data using get_series().
+    _client_ready is a cache-busting flag — changes when fred_client is initialized,
+    forcing a re-fetch instead of returning the stale cached failure.
+    """
     if st.session_state.fred_client is None:
         return {'yield_spread': 0, 'credit_spread': 0, 'fed_balance': 0, 'success': False}
     try:
@@ -1803,15 +1808,15 @@ def render_news_squawk():
 
     items_html = ""
     for article in articles:
-        source = article.get('Source', '')
-        title = article.get('Title', 'Untitled')
-        link = article.get('Link', '#')
-        items_html += f"""
-        <div class="news-item">
-            <div class="news-source">{source}</div>
-            <div class="news-title"><a href="{link}" target="_blank">{title}</a></div>
-        </div>
-        """
+        source = html_module.escape(article.get('Source', ''))
+        title = html_module.escape(article.get('Title', 'Untitled'))
+        link = html_module.escape(article.get('Link', '#'))
+        items_html += (
+            '<div class="news-item">'
+            f'<div class="news-source">{source}</div>'
+            f'<div class="news-title"><a href="{link}" target="_blank">{title}</a></div>'
+            '</div>'
+        )
 
     st.markdown(
         f'<div class="news-squawk">{items_html}</div>',
@@ -1856,7 +1861,7 @@ if st.button("🚀 GENERATE SESSION BRIEF", key="ai_macro", use_container_width=
     with st.spinner('🔬 Classifying session regime...'):
         indices = fetch_index_data()
         spx_opts = fetch_spx_options_data()
-        liq = fetch_fred_liquidity()
+        liq = fetch_fred_liquidity(_client_ready=(st.session_state.fred_client is not None))
         corrs = calculate_spx_crypto_correlation()
         bias = fetch_intraday_bias_levels()
 
@@ -2132,7 +2137,7 @@ with tab4:
 
         # --- FRED Liquidity ---
         st.markdown("### 🏛️ FED LIQUIDITY METRICS")
-        liq = fetch_fred_liquidity()
+        liq = fetch_fred_liquidity(_client_ready=(st.session_state.fred_client is not None))
 
         if liq['success']:
             cols_liq = st.columns(3)
